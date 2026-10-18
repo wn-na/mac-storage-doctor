@@ -8,6 +8,7 @@ struct MacStorageDoctorApp: App {
     var body: some Scene {
         WindowGroup("Mac Storage Doctor", id: "main") {
             MainView().environmentObject(model).frame(minWidth: 1040, minHeight: 700)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.shutdown() }
         }.defaultSize(width: 1250, height: 820)
         MenuBarExtra {
             MenuOverview().environmentObject(model)

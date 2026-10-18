@@ -23,6 +23,14 @@ final class AppModel: ObservableObject {
     @Published var exclusions = UserDefaults.standard.string(forKey: "exclusions") ?? ""
     @Published var automatic = UserDefaults.standard.bool(forKey: "automatic")
     @Published var warningGB = max(1, UserDefaults.standard.integer(forKey: "warningGB") == 0 ? 50 : UserDefaults.standard.integer(forKey: "warningGB"))
+    @Published var monitoring = UserDefaults.standard.object(forKey: "monitoring") as? Bool ?? true
+    @Published var monitoringStatus = "전체 분석 후 변경 감시 시작"
+    @Published var requiresFullRescan = false
+    private let watcher = FSEventWatcher()
+    private var watcherGeneration = UUID()
+    private var watchedRoots: [URL] = []
+    private var pendingEvents: [DirectoryEvent] = []
+    private var debounceTask: Task<Void, Never>?
     let cleaner = CleanupEngine()
     private var repository: SnapshotRepository?
     private var scanTask: Task<Void, Never>?
@@ -37,7 +45,12 @@ final class AppModel: ObservableObject {
         refreshCapacity()
         Task {
             await reloadHistory()
-            report = history.first
+            do { report = try await repository?.load(ScanReport.self, kind: "index", limit: 1).first ?? history.first }
+            catch { self.error = error.localizedDescription; report = history.first }
+            if report != nil {
+                requiresFullRescan = true
+                monitoringStatus = "재시작 이후 변경 확인을 위해 전체 분석 필요"
+            }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 refreshCapacity()
@@ -52,30 +65,99 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(exclusions, forKey: "exclusions")
         UserDefaults.standard.set(automatic, forKey: "automatic")
         UserDefaults.standard.set(warningGB, forKey: "warningGB")
+        UserDefaults.standard.set(monitoring, forKey: "monitoring")
+        watcher.stop(); watcherGeneration = UUID()
+        pendingEvents = []; debounceTask?.cancel(); debounceTask = nil
+        requiresFullRescan = report != nil
+        monitoringStatus = monitoring ? "설정 변경: 전체 분석 후 감시 재시작" : "변경 감시 꺼짐"
     }
     func toggleWarm(_ project: Project) {
         if keepWarm.contains(project.id) { keepWarm.remove(project.id) } else { keepWarm.insert(project.id) }
         UserDefaults.standard.set(Array(keepWarm), forKey: "keepWarm")
     }
+    private var excludedPaths: [String] {
+        exclusions.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        + ["Library/Mobile Documents", "Library/CloudStorage"].map { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent($0).path }
+    }
     func scan(quick: Bool = false) {
         guard !scanning && !working else { return }
-        scanning = true; paused = false; control = ScanControl(); lastAutoScan = Date()
-        progress = quick ? "알려진 공용 캐시를 측정하는 중…" : "내부 데이터 볼륨에서 프로젝트 탐색 중…"
-        let options = ScanOptions(roots: quick ? [] : [VolumeInventory.dataRoot] + volumes.filter { selectedExternal.contains($0.id) && $0.local }.map(\.url), exclusions: exclusions.split(separator: "\n").map(String.init), quick: quick)
+        let roots = [VolumeInventory.dataRoot] + volumes.filter { selectedExternal.contains($0.id) && $0.local }.map(\.url)
+        if !quick { startWatching(roots: roots) }
+        lastAutoScan = Date()
+        performScan(ScanOptions(roots: quick ? [] : roots, exclusions: excludedPaths, quick: quick), incremental: false)
+    }
+    private func startWatching(roots: [URL]) {
+        watcher.stop(); watcherGeneration = UUID(); watchedRoots = roots
+        debounceTask?.cancel(); debounceTask = nil; pendingEvents = []; requiresFullRescan = false
+        guard monitoring else { monitoringStatus = "변경 감시 꺼짐"; return }
+        let generation = watcherGeneration
+        do {
+            // Start before the full crawl, so changes during the baseline scan are queued.
+            try watcher.start(roots: roots) { [weak self] events in
+                Task { @MainActor in
+                    guard let self, self.watcherGeneration == generation else { return }
+                    self.receive(events)
+                }
+            }
+            monitoringStatus = "FSEvents 변경 감시 중"
+        } catch { self.error = error.localizedDescription; requireRecovery("변경 감시 시작 실패") }
+    }
+    private func requireRecovery(_ reason: String) {
+        requiresFullRescan = true; pendingEvents = []
+        debounceTask?.cancel(); debounceTask = nil
+        monitoringStatus = reason + " · 전체 분석 필요"
+    }
+    private func receive(_ incoming: [DirectoryEvent]) {
+        guard monitoring, !requiresFullRescan else { return }
+        let events = incoming.filter { IncrementalDiscovery.relevant($0, exclusions: excludedPaths) }
+        if events.contains(where: \.requiresFullScan) || pendingEvents.count + events.count > 1024 {
+            requireRecovery("이벤트 유실·대량 변경 또는 볼륨 변경 감지"); return
+        }
+        pendingEvents += events
+        schedulePending()
+    }
+    private func schedulePending() {
+        guard monitoring, !requiresFullRescan, !pendingEvents.isEmpty, debounceTask == nil else { return }
+        debounceTask = Task {
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            debounceTask = nil
+            guard !scanning && !working else { schedulePending(); return }
+            guard let baseline = report else { return }
+            let events = pendingEvents; pendingEvents = []
+            let plan = IncrementalDiscovery.plan(events: events, projects: baseline.projects, watchedRoots: watchedRoots, exclusions: excludedPaths)
+            if plan.requiresFullScan { requireRecovery("대량 변경 감지"); return }
+            guard !plan.roots.isEmpty else { return }
+            performScan(ScanOptions(roots: plan.roots, exclusions: excludedPaths, includeInventory: false), incremental: true)
+        }
+    }
+    private func performScan(_ options: ScanOptions, incremental: Bool) {
+        scanning = true; paused = false; control = ScanControl()
+        progress = incremental ? "변경된 폴더를 재검사하는 중…" : options.quick ? "알려진 공용 캐시를 측정하는 중…" : "내부 데이터 볼륨에서 프로젝트 탐색 중…"
         let currentControl = control
+        let baseline = report
         scanTask = Task {
             let worker = Task.detached(priority: .utility) {
                 await Scanner.scan(options, control: currentControl) { count, path in
                     await MainActor.run { self.progress = "\(count.formatted())개 폴더 확인 · \(path)" }
                 }
             }
-            let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
-            report = result
+            var result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+            if incremental { result.mode = "증분 분석" }
+            if let baseline, incremental || (result.cancelled && !options.quick) { report = IncrementalDiscovery.merge(baseline, delta: result) }
+            else if let baseline, options.quick { report = IncrementalDiscovery.mergeQuick(baseline, quick: result) }
+            else { report = result }
+            if result.cancelled && !options.quick { requireRecovery("검사 취소로 변경 반영 중단") }
             progress = result.cancelled ? "검사 취소 · 일부 결과 저장" : "\(result.directories.formatted())개 폴더 검사 · \(result.isPartial ? "부분 검사" : "선택 범위 검사 완료")"
-            do { try await repository?.save(result, kind: "scan", id: result.id.uuidString) } catch { self.error = error.localizedDescription }
+            do {
+                try await repository?.save(result, kind: "scan", id: result.id.uuidString)
+                if let report { try await repository?.save(report, kind: "index", id: "current-index") }
+            } catch { self.error = error.localizedDescription; requireRecovery("검사 결과 저장 실패") }
             scanning = false; paused = false; scanTask = nil
-            refreshCapacity(); await reloadHistory()
+            refreshCapacity(); await reloadHistory(); schedulePending()
         }
+    }
+    func shutdown() {
+        watcher.stop(); watcherGeneration = UUID(); debounceTask?.cancel(); cancel()
     }
     func cancel() { scanTask?.cancel(); control.setPaused(false) }
     func togglePause() { paused.toggle(); control.setPaused(paused) }
@@ -95,6 +177,7 @@ final class AppModel: ObservableObject {
                 // Keep the visible result even if persistent storage fails.
                 cleanupHistory.insert(record, at: 0)
                 report?.artifacts.removeAll { $0.id == approved.artifact.id }
+                if let report { try await repository?.save(report, kind: "index", id: "current-index") }
                 try await repository?.save(record, kind: "cleanup", id: record.id.uuidString)
                 refreshCapacity()
             } catch { self.error = error.localizedDescription }

@@ -65,6 +65,10 @@ struct MainView: View {
                         if model.scanning {
                             HStack { ProgressView().controlSize(.small); Text(model.progress).font(.caption).lineLimit(1); Spacer() }.padding().background(.mint.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                         }
+                        if model.requiresFullRescan {
+                            Label(model.monitoringStatus, systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                                .font(.callout).foregroundStyle(.orange)
+                        }
                         content
                     }.padding(28)
                 }
@@ -159,7 +163,7 @@ struct MainView: View {
                     Button { model.reveal(project.root) } label: { Image(systemName: "arrow.up.forward.square") }
                 }.padding(18).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
             }
-            if model.report?.projects.isEmpty != false { empty("발견된 프로젝트 없음", subtitle: "전체 분석으로 로컬 볼륨을 검사하세요. 빠른 분석은 프로젝트를 탐색하지 않습니다.") }
+            if model.report?.projects.isEmpty != false { empty("발견된 프로젝트 없음", subtitle: "전체 분석으로 로컬 볼륨을 검사하세요. 빠른 분석은 기존 프로젝트 결과를 유지합니다.") }
         }
     }
     private func inventory(title: String, artifacts: [Artifact]) -> some View {
@@ -233,6 +237,8 @@ struct MainView: View {
         VStack(alignment: .leading, spacing: 18) {
             GroupBox("점검 설정") {
                 VStack(alignment: .leading, spacing: 14) {
+                    Toggle("전체 분석 이후 프로젝트 변경 감시 (FSEvents)", isOn: $model.monitoring)
+                    Text(model.monitoringStatus).font(.caption).foregroundStyle(.secondary)
                     Toggle("앱 실행 중 매일 알려진 캐시 자동 분석", isOn: $model.automatic)
                     Stepper("여유 공간 경고: \(model.warningGB) GiB", value: $model.warningGB, in: 1...500)
                     Text("자동 삭제 없음. 용량은 앱 실행 중 60초마다 갱신됩니다.").font(.caption).foregroundStyle(.secondary)

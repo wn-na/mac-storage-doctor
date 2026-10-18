@@ -42,6 +42,7 @@ public enum ProjectClassifier {
         let sorted = input.sorted { $0.root.path.count < $1.root.path.count }
         var results: [Project] = []
         for var project in sorted {
+            project.workspace = nil
             let parent = results.last { project.root.path.hasPrefix($0.root.path + "/") }
             if let parent {
                 let relative = String(project.root.path.dropFirst(parent.root.path.count + 1))
