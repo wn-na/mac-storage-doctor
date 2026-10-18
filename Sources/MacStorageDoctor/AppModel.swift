@@ -19,8 +19,11 @@ final class AppModel: ObservableObject {
         didSet { updateCapacityHistory() }
     }
     private var capacityRequest = UUID()
+    private var capacityRefreshInFlight = false
+    private var capacityChartSubscribers = 0
+    private var progressLastPublished = Date.distantPast
     @Published var report: ScanReport?
-    @Published var history: [ScanReport] = []
+    @Published var history: [ScanSummary] = []
     @Published var cleanupHistory: [CleanupRecord] = []
     @Published var scanning = false
     @Published var paused = false
@@ -79,16 +82,19 @@ final class AppModel: ObservableObject {
             UserDefaults.standard.set(false, forKey: "monitoring")
             UserDefaults.standard.set(true, forKey: "manualAnalysisDefaultV2")
         }
-        do {
-            let dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            repository = try SnapshotRepository(url: dir.appendingPathComponent("MacStorageDoctor/history.sqlite"))
-        } catch { self.error = error.localizedDescription }
-        refreshCapacity()
         Task {
+            do {
+                repository = try await Task.detached(priority: .utility) {
+                    let dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                    return try SnapshotRepository(url: dir.appendingPathComponent("MacStorageDoctor/history.sqlite"))
+                }.value
+                var loaded = try await repository?.load(ScanReport.self, kind: "index", limit: 1).first
+                if loaded == nil { loaded = try await repository?.load(ScanReport.self, kind: "scan", limit: 1).first }
+                if let loaded { report = await Task.detached(priority: .utility) { CleanupCatalog.upgrade(loaded) }.value }
+            } catch { self.error = error.localizedDescription }
+            refreshLoginStatus()
+            refreshCapacity()
             await reloadHistory()
-            do { report = try await repository?.load(ScanReport.self, kind: "index", limit: 1).first ?? history.first }
-            catch { self.error = error.localizedDescription; report = history.first }
-            if let loaded = report { report = CleanupCatalog.upgrade(loaded) }
             if report != nil {
                 requiresFullRescan = true
                 monitoringStatus = "재시작 이후 변경 확인을 위해 전체 분석 필요"
@@ -103,9 +109,21 @@ final class AppModel: ObservableObject {
         }
     }
     func refreshCapacity() {
-        volume = try? VolumeInventory.read(VolumeInventory.dataRoot); volumes = VolumeInventory.mounted()
-        refreshLoginStatus()
-        updateCapacityHistory(record: true)
+        guard !capacityRefreshInFlight else { return }
+        capacityRefreshInFlight = true
+        Task {
+            defer { capacityRefreshInFlight = false }
+            let snapshot = await Task.detached(priority: .utility) {
+                (try? VolumeInventory.read(VolumeInventory.dataRoot), VolumeInventory.mounted())
+            }.value
+            if volume != snapshot.0 { volume = snapshot.0 }
+            if volumes != snapshot.1 { volumes = snapshot.1 }
+            updateCapacityHistory(record: true)
+        }
+    }
+    func observeCapacityHistory(_ visible: Bool) {
+        capacityChartSubscribers = max(0, capacityChartSubscribers + (visible ? 1 : -1))
+        if visible { updateCapacityHistory() }
     }
     private func updateCapacityHistory(record: Bool = false) {
         let request = UUID(); capacityRequest = request
@@ -118,6 +136,7 @@ final class AppModel: ObservableObject {
             do {
                 guard let repository else { throw RepositoryError.failure("이력 저장소를 열 수 없습니다.") }
                 if record { try await repository.recordCapacity(volume) }
+                guard capacityChartSubscribers > 0 else { return }
                 let points = try await repository.capacity(volumeID: volume.id, since: range.start())
                 let aggregated = await Task.detached(priority: .utility) {
                     CapacityHistory.aggregate(points, resolution: range.resolution)
@@ -234,15 +253,24 @@ final class AppModel: ObservableObject {
         scanTask = Task {
             let worker = Task.detached(priority: .utility) {
                 await Scanner.scan(options, control: currentControl) { count, path in
-                    await MainActor.run { self.progress = "\(count.formatted())개 폴더 확인 · \(path)" }
+                    await MainActor.run {
+                        if Date().timeIntervalSince(self.progressLastPublished) >= 0.25 {
+                            self.progressLastPublished = Date()
+                            self.progress = "\(count.formatted())개 폴더 확인 · \(path)"
+                        }
+                    }
                 }
             }
             var result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
             if incremental { result.mode = "증분 분석" }
-            if let baseline, incremental || (result.cancelled && !options.quick) { report = IncrementalDiscovery.merge(baseline, delta: result) }
-            else if let baseline, options.quick { report = IncrementalDiscovery.mergeQuick(baseline, quick: result) }
-            else { report = result }
-            if let current = report { report = CleanupCatalog.upgrade(current) }
+            let completed = result
+            report = await Task.detached(priority: .utility) {
+                let merged: ScanReport
+                if let baseline, incremental || (completed.cancelled && !options.quick) { merged = IncrementalDiscovery.merge(baseline, delta: completed) }
+                else if let baseline, options.quick { merged = IncrementalDiscovery.mergeQuick(baseline, quick: completed) }
+                else { merged = completed }
+                return CleanupCatalog.upgrade(merged)
+            }.value
             if result.cancelled && !options.quick { requireRecovery("검사 취소로 변경 반영 중단") }
             progress = result.cancelled ? "검사 취소 · 일부 결과 저장" : "\(result.directories.formatted())개 폴더 검사 · \(result.isPartial ? "부분 검사" : "선택 범위 검사 완료")"
             do {
@@ -382,15 +410,19 @@ final class AppModel: ObservableObject {
     }
     func reloadHistory() async {
         do {
-            history = try await repository?.load(ScanReport.self, kind: "scan", limit: 30) ?? []
+            history = try await repository?.scanSummaries() ?? []
             cleanupHistory = try await repository?.load(CleanupRecord.self, kind: "cleanup") ?? []
         } catch { self.error = error.localizedDescription }
     }
     func inspectToolchains() {
         guard !working else { return }; working = true
         Task {
-            installations = await Task.detached(priority: .utility) { ToolchainInspector.installations() }.value
-            diagnostics = ToolchainInspector.ndkRequirements(projects: report?.projects ?? [], installations: installations)
+            let projects = report?.projects ?? []
+            let inspected = await Task.detached(priority: .utility) {
+                let installations = ToolchainInspector.installations()
+                return (installations, ToolchainInspector.ndkRequirements(projects: projects, installations: installations))
+            }.value
+            installations = inspected.0; diagnostics = inspected.1
             working = false
         }
     }

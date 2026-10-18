@@ -5,7 +5,7 @@ struct DeveloperManagerView: View {
     @EnvironmentObject var model: AppModel
     @State private var section = 0
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        LazyVStack(alignment: .leading, spacing: 18) {
             HStack {
                 Text("설치 버전과 기기를 개별 관리합니다").font(.title3.bold())
                 Spacer()

@@ -54,6 +54,8 @@ struct CapacityHistoryView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
         }
+        .onAppear { model.observeCapacityHistory(true) }
+        .onDisappear { model.observeCapacityHistory(false) }
         .onChange(of: model.capacityRange) { selectedDate = nil }
     }
 }

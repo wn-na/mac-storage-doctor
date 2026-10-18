@@ -15,7 +15,7 @@ struct SpaceExplorer: View {
     @State private var error: String?
     @State private var task: Task<Void, Never>?
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        LazyVStack(alignment: .leading, spacing: 18) {
             HStack {
                 Button { root.deleteLastPathComponent(); measure() } label: { Image(systemName: "arrow.up") }.disabled(busy)
                 Text(root.path).font(.system(.callout, design: .monospaced)).textSelection(.enabled)

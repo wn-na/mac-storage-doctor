@@ -21,6 +21,9 @@ struct MainView: View {
     @State private var kind: ArtifactKind?
     @State private var topOnly = true
     @State private var search = ""
+    @State private var showOverview = false
+    @State private var showExplorer = false
+    @State private var showCoverage = false
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 8) {
@@ -61,7 +64,7 @@ struct MainView: View {
                 }.padding(28)
                 Divider()
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
+                    LazyVStack(alignment: .leading, spacing: 22) {
                         if model.scanning {
                             HStack { ProgressView().controlSize(.small); Text(model.progress).font(.caption).lineLimit(1); Spacer() }.padding().background(.mint.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                         }
@@ -73,7 +76,7 @@ struct MainView: View {
                         if let summary = model.cleanupSummary { Text(summary).font(.callout).foregroundStyle(.secondary) }
                         content
                     }.padding(28)
-                }
+                }.id(page)
                 HStack {
                     Circle().fill(model.scanning ? .orange : .mint).frame(width: 6, height: 6)
                     Text(model.report?.finishedAt.map { "최근 검사 " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "검사 기록 없음")
@@ -94,8 +97,8 @@ struct MainView: View {
         case .storage:
             HStack { Label("사용 가능한 공간", systemImage: "internaldrive"); Text(model.volume.map { Format.bytes($0.available) } ?? "—").font(.title2.bold()); Spacer(); Text("분석은 기본 수동 · 용량 표시만 60초 갱신").font(.caption).foregroundStyle(.secondary) }
             inventory(title: "유형별 용량과 정리", artifacts: model.report?.artifacts ?? [])
-            DisclosureGroup("용량 추이 · 분석 범위 설명") { overview }
-            DisclosureGroup("폴더별 용량 탐색") { SpaceExplorer() }
+            DisclosureGroup("용량 추이 · 분석 범위 설명", isExpanded: $showOverview) { if showOverview { overview } }
+            DisclosureGroup("폴더별 용량 탐색", isExpanded: $showExplorer) { if showExplorer { SpaceExplorer() } }
         case .projects: projects
         case .tools: DeveloperManagerView()
         case .history: history
@@ -143,7 +146,7 @@ struct MainView: View {
         VStack(alignment: .leading, spacing: 14) { Label(title, systemImage: symbol).foregroundStyle(color); Text(Format.bytes(amount)).font(.title.bold()); Text("측정된 할당 용량 · 회수 보장 아님").font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading).padding(22).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 14))
     }
     private var projects: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        LazyVStack(alignment: .leading, spacing: 16) {
             TextField("프로젝트 이름 또는 경로 검색", text: $search).textFieldStyle(.roundedBorder)
             ForEach((model.report?.projects ?? []).filter { search.isEmpty || $0.root.path.localizedCaseInsensitiveContains(search) }) { project in
                 HStack {
@@ -166,7 +169,7 @@ struct MainView: View {
     private func inventory(title: String, artifacts: [Artifact]) -> some View {
         let filtered = artifacts.filter { (kind == nil || $0.kind == kind) && (search.isEmpty || ($0.owner + $0.url.path).localizedCaseInsensitiveContains(search)) }
         let visible = CleanupCatalog.top(filtered, limit: topOnly ? 10 : filtered.count)
-        return VStack(alignment: .leading, spacing: 16) {
+        return LazyVStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text(title).font(.title3.bold())
                 Spacer()
@@ -222,7 +225,7 @@ struct MainView: View {
         }.padding(16).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
     }
     private var history: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        LazyVStack(alignment: .leading, spacing: 16) {
             HStack { Text("분석 및 정리 기록").font(.title3.bold()); Spacer(); Button("마스킹된 JSON 보고서 내보내기") { model.export() }.disabled(model.report == nil) }
             CapacityHistoryView()
             ForEach(model.cleanupHistory) { record in
@@ -241,7 +244,7 @@ struct MainView: View {
                 }.padding()
             }
             ForEach(model.history) { scan in
-                HStack { Image(systemName: "clock").foregroundStyle(.mint); Text(scan.startedAt.formatted()); Spacer(); Text(scan.mode); Text("프로젝트 \(scan.projects.count) · \(scan.isPartial ? "부분" : "완료")") }.padding().background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
+                HStack { Image(systemName: "clock").foregroundStyle(.mint); Text(scan.startedAt.formatted()); Spacer(); Text(scan.mode); Text("프로젝트 \(scan.projectCount) · \(scan.isPartial ? "부분" : "완료")") }.padding().background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
             }
             if model.history.isEmpty { empty("아직 기록이 없습니다", subtitle: "검사 결과는 이 Mac의 SQLite 데이터베이스에 저장됩니다.") }
         }
@@ -287,12 +290,12 @@ struct MainView: View {
                     Text("FDA를 허용해도 SIP 보호 영역은 읽을 수 없을 수 있습니다. 네트워크 볼륨은 기본 검사에 포함되지 않습니다.").font(.caption).foregroundStyle(.secondary)
                 }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
             }
-            DisclosureGroup("제외·접근 불가·미검사 영역 (\(model.report?.issues.count ?? 0))") {
-                LazyVStack(alignment: .leading, spacing: 10) {
+            DisclosureGroup("제외·접근 불가·미검사 영역 (\(model.report?.issues.count ?? 0))", isExpanded: $showCoverage) {
+                if showCoverage { LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(Array((model.report?.issues ?? []).enumerated()), id: \.offset) { _, issue in
                         VStack(alignment: .leading) { Text(issue.path).textSelection(.enabled); Text(issue.reason).foregroundStyle(.secondary) }.font(.caption)
                     }
-                }.padding(.top, 12)
+                }.padding(.top, 12) }
             }
         }
     }

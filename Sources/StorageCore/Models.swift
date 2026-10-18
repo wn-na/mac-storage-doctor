@@ -47,7 +47,7 @@ public struct Artifact: Identifiable, Codable, Sendable {
     public var scannedAt: Date = Date()
     public var canTrash: Bool { ["xcode-derived-child", "project-generated"].contains(policy) && risk == .review && measurement.complete && identity != nil }
 }
-public struct Volume: Identifiable, Codable, Sendable {
+public struct Volume: Identifiable, Codable, Sendable, Equatable {
     public var id: String
     public var url: URL
     public var name: String
@@ -97,4 +97,13 @@ public enum Format {
         let scaled = Double(value) / pow(1024, Double(index))
         return index == 0 ? "\(value) B" : String(format: "%.1f %@", scaled, units[index])
     }
+}
+
+/// Lightweight list data; large project/artifact arrays remain in the stored report.
+public struct ScanSummary: Identifiable, Sendable {
+    public let id: UUID
+    public let startedAt: Date
+    public let mode: String
+    public let projectCount: Int
+    public let isPartial: Bool
 }

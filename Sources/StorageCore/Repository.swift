@@ -8,7 +8,7 @@ public actor SnapshotRepository {
         databaseURL = url
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Self.withDB(url) { db in
-            try Self.execute(db, "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, date REAL NOT NULL, kind TEXT NOT NULL, payload BLOB NOT NULL); CREATE TABLE IF NOT EXISTS capacity (id TEXT PRIMARY KEY, volume TEXT NOT NULL, resolution TEXT NOT NULL, date REAL NOT NULL, payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS capacity_volume_date ON capacity(volume, date);")
+            try Self.execute(db, "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, date REAL NOT NULL, kind TEXT NOT NULL, payload BLOB NOT NULL); CREATE TABLE IF NOT EXISTS capacity (id TEXT PRIMARY KEY, volume TEXT NOT NULL, resolution TEXT NOT NULL, date REAL NOT NULL, payload BLOB NOT NULL); CREATE INDEX IF NOT EXISTS capacity_volume_date ON capacity(volume, date); CREATE INDEX IF NOT EXISTS events_kind_date ON events(kind, date DESC);")
         }
     }
     /// Replace a repeated observation in the same minute, rather than overweighting manual refreshes.
@@ -105,6 +105,33 @@ public actor SnapshotRepository {
             sqlite3_bind_text(statement, 3, kind, -1, transient)
             _ = data.withUnsafeBytes { sqlite3_bind_blob(statement, 4, $0.baseAddress, Int32($0.count), transient) }
             guard sqlite3_step(statement) == SQLITE_DONE else { throw RepositoryError.failure(String(cString: sqlite3_errmsg(db))) }
+        }
+    }
+    public func scanSummaries(limit: Int = 30) throws -> [ScanSummary] {
+        try Self.withDB(databaseURL) { db in
+            let sql = """
+            WITH latest AS (SELECT CAST(payload AS TEXT) AS report FROM events WHERE kind = 'scan' ORDER BY date DESC LIMIT ?)
+            SELECT json_extract(report, '$.id'), json_extract(report, '$.startedAt'),
+                   json_extract(report, '$.mode'), json_array_length(report, '$.projects'),
+                   json_extract(report, '$.cancelled'), json_array_length(report, '$.issues') FROM latest
+            """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw RepositoryError.failure("검사 요약 조회 실패") }
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_int(statement, 1, Int32(clamping: max(0, limit)))
+            var result: [ScanSummary] = []
+            while true {
+                let status = sqlite3_step(statement)
+                if status == SQLITE_DONE { return result }
+                guard status == SQLITE_ROW, let idText = sqlite3_column_text(statement, 0),
+                      let id = UUID(uuidString: String(cString: idText)), let modeText = sqlite3_column_text(statement, 2) else {
+                    throw RepositoryError.failure("검사 요약 읽기 실패")
+                }
+                let mode = String(cString: modeText)
+                result.append(ScanSummary(id: id, startedAt: Date(timeIntervalSinceReferenceDate: sqlite3_column_double(statement, 1)),
+                                          mode: mode, projectCount: Int(sqlite3_column_int64(statement, 3)),
+                                          isPartial: sqlite3_column_int(statement, 4) != 0 || sqlite3_column_int(statement, 5) != 0 || mode != "전체 분석"))
+            }
         }
     }
     public func load<T: Decodable & Sendable>(_ type: T.Type, kind: String, limit: Int = 100) throws -> [T] {
