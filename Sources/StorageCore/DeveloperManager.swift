@@ -38,6 +38,20 @@ public struct DeveloperInventory: Sendable {
     public var issues: [String] = []
     public init() {}
 }
+public enum SimulatorCleanupAction: String, Sendable {
+    case delete, erase
+    public var title: String { self == .delete ? "기기 삭제" : "데이터 초기화" }
+    public var impact: String {
+        self == .delete
+        ? "선택한 기기와 그 안의 앱·사진·설정·테스트 데이터가 영구 삭제됩니다."
+        : "기기 등록은 유지하고 앱·사진·설정·테스트 데이터를 모두 초기화합니다. 캐시만 지우는 작업이 아닙니다."
+    }
+}
+public struct SimulatorCleanupBatch: Identifiable, Sendable {
+    public let id = UUID()
+    public let action: SimulatorCleanupAction
+    public let items: [ManagedRemovalPreview]
+}
 public struct ManagedRemovalPreview: Identifiable, Sendable {
     public let id = UUID()
     public let createdAt = Date()
@@ -46,7 +60,13 @@ public struct ManagedRemovalPreview: Identifiable, Sendable {
     public let command: String
     public let sdk: SDKPackage?
     public let device: SimulatorDevice?
+    public let deviceAction: SimulatorCleanupAction
     fileprivate let managerIdentity: FileIdentity?
+    init(title: String, impact: String, command: String, sdk: SDKPackage?, device: SimulatorDevice?,
+         deviceAction: SimulatorCleanupAction = .delete, managerIdentity: FileIdentity?) {
+        self.title = title; self.impact = impact; self.command = command
+        self.sdk = sdk; self.device = device; self.deviceAction = deviceAction; self.managerIdentity = managerIdentity
+    }
 }
 public enum DeveloperManager {
     public static func parsePackages(_ output: String, root: URL, manager: URL) throws -> [SDKPackage] {
@@ -177,11 +197,33 @@ public actor DeveloperActions {
             managerIdentity: try FileSystem.identity(sdk.manager))
         issue(preview); return preview
     }
-    public func preview(device: SimulatorDevice) throws -> ManagedRemovalPreview {
+    public func preview(device: SimulatorDevice, action: SimulatorCleanupAction = .delete) throws -> ManagedRemovalPreview {
         let current = try readDevices().first { $0.id == device.id }
-        guard let current, current.canDelete, current.name == device.name, current.runtime == device.runtime else { throw CleanupError.blocked("기기가 변경되었거나 실행 중입니다. 종료 후 새로고침하세요.") }
-        let preview = ManagedRemovalPreview(title: device.name, impact: "이 기기의 앱·사진·테스트 데이터가 영구 삭제됩니다. 런타임은 유지됩니다. 기기를 다시 만들어도 기존 데이터는 복원되지 않습니다.", command: "xcrun simctl delete \(device.udid)", sdk: nil, device: current, managerIdentity: nil)
+        guard let current, current.canDelete, current.name == device.name,
+              current.runtime == device.runtime, current.available == device.available else {
+            throw CleanupError.blocked("기기가 변경되었거나 실행 중입니다. 종료 후 새로고침하세요.")
+        }
+        guard action != .erase || current.available else {
+            throw CleanupError.blocked("사용 불가 기기는 초기화할 수 없습니다. 기기 삭제를 사용하세요.")
+        }
+        let preview = ManagedRemovalPreview(title: device.name + " · " + action.title,
+            impact: action.impact + " 공용 런타임은 유지됩니다. 이전 데이터는 복원되지 않습니다.",
+            command: "xcrun simctl \(action.rawValue) \(device.udid)", sdk: nil, device: current,
+            deviceAction: action, managerIdentity: nil)
         issue(preview); return preview
+    }
+    public func preview(devices: [SimulatorDevice], action: SimulatorCleanupAction) throws -> SimulatorCleanupBatch {
+        guard !devices.isEmpty, Set(devices.map(\.id)).count == devices.count else {
+            throw CleanupError.blocked("중복 없는 기기를 하나 이상 선택하세요.")
+        }
+        var items: [ManagedRemovalPreview] = []
+        do {
+            for device in devices { items.append(try preview(device: device, action: action)) }
+        } catch {
+            for item in items { issued.removeValue(forKey: item.id) }
+            throw error
+        }
+        return SimulatorCleanupBatch(action: action, items: items)
     }
     private func validate(_ sdk: SDKPackage) throws {
         guard sdk.removable, FileSystem.canonicalPath(sdk.root) == sdk.root.path,
@@ -204,12 +246,21 @@ public actor DeveloperActions {
             path = sdk.location.path
         } else if let device = preview.device {
             guard let current = try readDevices().first(where: { $0.id == device.id }), current.canDelete,
-                  current.name == device.name, current.runtime == device.runtime else { throw CleanupError.blocked("기기 상태가 변경되었습니다.") }
-            _ = try command("/usr/bin/xcrun", ["simctl", "delete", device.udid])
-            guard try !readDevices().contains(where: { $0.id == device.id }) else { throw CleanupError.blocked("기기 삭제 완료를 확인하지 못했습니다.") }
+                  current.name == device.name, current.runtime == device.runtime, current.available == device.available,
+                  preview.deviceAction != .erase || current.available else { throw CleanupError.blocked("기기 상태가 변경되었습니다.") }
+            _ = try command("/usr/bin/xcrun", ["simctl", preview.deviceAction.rawValue, device.udid])
+            let remaining = try readDevices().first { $0.id == device.id }
+            if preview.deviceAction == .delete {
+                guard remaining == nil else { throw CleanupError.blocked("기기 삭제 완료를 확인하지 못했습니다.") }
+            } else {
+                guard let remaining, remaining.canDelete, remaining.available,
+                      remaining.name == device.name, remaining.runtime == device.runtime else {
+                    throw CleanupError.blocked("초기화 명령 이후 기기 상태를 확인하지 못했습니다.")
+                }
+            }
             path = device.udid
         } else { throw CleanupError.blocked("삭제 대상이 없습니다.") }
         let after = try? VolumeInventory.read(VolumeInventory.dataRoot).available
-        return CleanupRecord(path: path, status: "공식 도구로 제거 완료 · " + preview.title, before: before, after: after, recoveryHint: preview.sdk?.restoreCommand ?? "기기를 다시 생성해도 삭제된 기기 데이터는 복구되지 않습니다.")
+        return CleanupRecord(path: path, status: (preview.deviceAction == .erase ? "공식 초기화 명령 완료 · " : "공식 도구로 제거 완료 · ") + preview.title, before: before, after: after, recoveryHint: preview.sdk?.restoreCommand ?? "기기를 다시 생성해도 삭제된 기기 데이터는 복구되지 않습니다.")
     }
 }

@@ -4,6 +4,9 @@ import StorageCore
 struct DeveloperManagerView: View {
     @EnvironmentObject var model: AppModel
     @State private var section = 0
+    private var selectedDevices: [SimulatorDevice] {
+        model.developerInventory.devices.filter { model.selectedDevices.contains($0.id) }
+    }
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 18) {
             HStack {
@@ -50,9 +53,32 @@ struct DeveloperManagerView: View {
             }
             }
             if section == 1 {
-            Text("Simulator 기기").font(.title3.bold())
+            Text("Simulator 클린").font(.title3.bold())
+            Text("데이터 초기화는 기기를 남기고 앱·사진·설정을 모두 지웁니다. 기기 삭제는 등록까지 제거합니다. 두 작업 모두 복구할 수 없으며 공용 런타임은 유지됩니다.").font(.callout).foregroundStyle(.secondary)
+            HStack {
+                Button("사용 불가 기기 선택") {
+                    model.selectedDevices = Set(model.developerInventory.devices.filter { !$0.available && $0.canDelete }.map(\.id))
+                }
+                Button("종료된 기기 선택") {
+                    model.selectedDevices = Set(model.developerInventory.devices.filter(\.canDelete).map(\.id))
+                }
+                Button("선택 해제") { model.selectedDevices.removeAll() }
+            }.disabled(model.working || model.scanning)
+            HStack {
+                Text("선택 \(selectedDevices.count)개 · 측정된 기기 용량 \(Format.bytes(selectedDevices.compactMap(\.bytes).reduce(0, +)))").font(.caption)
+                Spacer()
+                Button("데이터 초기화…") { model.prepareSimulatorCleanup(.erase) }
+                    .disabled(selectedDevices.isEmpty || selectedDevices.contains { !$0.canDelete || !$0.available } || model.working || model.scanning)
+                Button("선택 기기 삭제…") { model.prepareSimulatorCleanup(.delete) }
+                    .disabled(selectedDevices.isEmpty || selectedDevices.contains { !$0.canDelete } || model.working || model.scanning)
+            }
+            Text("용량은 마지막 측정값이며 실제 회수량과 다릅니다. 미측정 \(selectedDevices.filter { $0.bytes == nil }.count)개. 실행 중인 기기는 Simulator에서 종료한 뒤 목록을 새로고침하세요.").font(.caption).foregroundStyle(.secondary)
             ForEach(model.developerInventory.devices.sorted { ($0.bytes ?? -1) > ($1.bytes ?? -1) }) { device in
                 HStack {
+                    Toggle("선택", isOn: Binding(get: { model.selectedDevices.contains(device.id) }, set: { selected in
+                        if selected { model.selectedDevices.insert(device.id) } else { model.selectedDevices.remove(device.id) }
+                    })).toggleStyle(.checkbox).labelsHidden().accessibilityLabel(device.name + " 선택")
+                        .disabled(!device.canDelete || model.working || model.scanning)
                     VStack(alignment: .leading, spacing: 5) {
                         Text(device.name).font(.headline)
                         Text(device.runtime).font(.caption)

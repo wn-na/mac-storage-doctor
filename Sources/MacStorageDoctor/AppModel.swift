@@ -31,6 +31,8 @@ final class AppModel: ObservableObject {
     @Published var error: String?
     @Published var preview: CleanupPreview?
     @Published var batchPreview: BatchCleanupPreview?
+    @Published var simulatorBatch: SimulatorCleanupBatch?
+    @Published var selectedDevices: Set<String> = []
     @Published var managedPreview: ManagedRemovalPreview?
     @Published var developerInventory = DeveloperInventory()
     @Published var developerLoaded = false
@@ -41,7 +43,7 @@ final class AppModel: ObservableObject {
     @Published var incrementalMinutes = max(5, UserDefaults.standard.integer(forKey: "incrementalMinutes") == 0 ? 30 : UserDefaults.standard.integer(forKey: "incrementalMinutes"))
     private let developerActions = DeveloperActions()
     private var lastIncremental = Date.distantPast
-    var hasApproval: Bool { preview != nil || batchPreview != nil || managedPreview != nil }
+    var hasApproval: Bool { preview != nil || batchPreview != nil || managedPreview != nil || simulatorBatch != nil }
     var selectedItems: [Artifact] { (report?.artifacts ?? []).filter { selectedArtifacts.contains($0.id) && $0.canTrash } }
     var quickItems: [Artifact] { (report?.artifacts ?? []).filter { $0.quickEligible && !keepWarm.contains($0.projectID ?? "") } }
     @Published var working = false
@@ -393,6 +395,41 @@ final class AppModel: ObservableObject {
             defer { working = false }
             do { managedPreview = try await developerActions.preview(device: device) }
             catch { self.error = error.localizedDescription }
+        }
+    }
+    func prepareSimulatorCleanup(_ action: SimulatorCleanupAction) {
+        guard !working && !scanning && !hasApproval else { return }
+        let devices = developerInventory.devices.filter { selectedDevices.contains($0.id) }
+        working = true
+        Task {
+            defer { working = false }
+            do { simulatorBatch = try await developerActions.preview(devices: devices, action: action) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    func cleanSimulators(_ batch: SimulatorCleanupBatch) {
+        guard !working && !scanning, simulatorBatch?.id == batch.id else { return }
+        working = true; simulatorBatch = nil
+        Task {
+            var succeeded = 0, failed = 0
+            for (index, item) in batch.items.enumerated() {
+                cleanupSummary = "\(batch.action.title) 중 \(index + 1)/\(batch.items.count) · \(item.title)"
+                let record: CleanupRecord
+                do {
+                    record = try await developerActions.execute(item, keepWarm: keepWarm, projects: report?.projects ?? [])
+                    succeeded += 1
+                    if let device = item.device { selectedDevices.remove(device.id) }
+                } catch {
+                    record = .failed(path: item.device?.udid ?? item.title, reason: error.localizedDescription)
+                    failed += 1
+                }
+                await recordCleanup(record)
+            }
+            developerInventory = await Task.detached(priority: .utility) { DeveloperManager.inventory() }.value
+            selectedDevices.formIntersection(Set(developerInventory.devices.map(\.id)))
+            developerSizesRequested = false
+            cleanupSummary = "\(batch.action.title) 완료 \(succeeded)개 · 실패 \(failed)개. 상세 결과는 기록에서 확인하세요. 공용 런타임은 유지됩니다."
+            working = false; refreshCapacity()
         }
     }
     func removeManaged(_ approved: ManagedRemovalPreview) {

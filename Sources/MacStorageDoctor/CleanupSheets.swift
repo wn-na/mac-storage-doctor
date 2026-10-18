@@ -40,3 +40,35 @@ struct ManagedRemovalSheet: View {
         }.padding(28).frame(width: 640)
     }
 }
+
+struct SimulatorCleanupSheet: View {
+    @EnvironmentObject var model: AppModel
+    let batch: SimulatorCleanupBatch
+    @State private var acknowledged = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Label("Simulator · " + batch.action.title, systemImage: "exclamationmark.triangle").font(.title2.bold()).foregroundStyle(.orange)
+            Text(batch.action.impact)
+            Text("공용 iOS 런타임은 유지되며 이전 데이터는 복구할 수 없습니다. 선택한 기기만 처리하고 실행 직전 종료 상태와 기기 정보를 다시 확인합니다.").foregroundStyle(.secondary)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(batch.items) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title).bold()
+                            Text(item.device?.runtime ?? "").font(.caption)
+                            Text(item.command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        }
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(maxHeight: 280)
+            Text("승인은 5분 동안 유효합니다. 일부 항목이 실패해도 나머지는 진행되며 결과는 각각 기록됩니다.").font(.caption)
+            Toggle("선택한 기기의 데이터가 영구 삭제됨을 확인했습니다", isOn: $acknowledged)
+            HStack {
+                Spacer()
+                Button("취소") { model.simulatorBatch = nil }
+                Button("\(batch.items.count)개 " + batch.action.title, role: .destructive) { model.cleanSimulators(batch) }
+                    .disabled(!acknowledged || batch.items.isEmpty)
+            }
+        }.padding(28).frame(width: 640)
+    }
+}

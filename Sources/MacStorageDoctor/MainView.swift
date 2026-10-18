@@ -88,6 +88,7 @@ struct MainView: View {
         .tint(.mint)
         .alert("작업 안내", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) { Button("확인") { model.error = nil } } message: { Text(model.error ?? "") }
         .sheet(item: $model.batchPreview) { BatchCleanupSheet(batch: $0).environmentObject(model) }
+        .sheet(item: $model.simulatorBatch) { SimulatorCleanupSheet(batch: $0).environmentObject(model) }
         .sheet(item: $model.managedPreview) { ManagedRemovalSheet(preview: $0).environmentObject(model) }
         .sheet(isPresented: $model.tutorialPresented) { TutorialView().environmentObject(model) }
     }

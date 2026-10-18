@@ -15,7 +15,7 @@ private final class FakeDeveloperTools: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         calls.append([executable] + arguments)
         if arguments.contains("--uninstall") { packages = [] }
-        if arguments.prefix(2) == ["simctl", "delete"] { devices = [] }
+        if arguments.prefix(2) == ["simctl", "delete"] { devices.removeAll { $0.udid == arguments.last } }
         return ""
     }
     func engine() -> DeveloperActions {
@@ -65,6 +65,52 @@ final class DeveloperManagementTests: XCTestCase {
         fake.set(devices: [SimulatorDevice(udid: device.udid, name: device.name, runtime: device.runtime, state: "Booted", available: true)])
         do { _ = try await engine.execute(preview, keepWarm: [], projects: []); XCTFail("Booted device deleted") } catch {}
         XCTAssertTrue(fake.getCalls().isEmpty)
+    }
+    func testEraseKeepsDeviceAndUsesExactUUIDOnce() async throws {
+        let fake = FakeDeveloperTools(), engine = fake.engine()
+        let device = SimulatorDevice(udid: UUID().uuidString, name: "Fixture", runtime: "runtime", state: "Shutdown", available: true)
+        fake.set(devices: [device])
+        let preview = try await engine.preview(device: device, action: .erase)
+        let record = try await engine.execute(preview, keepWarm: [], projects: [])
+        XCTAssertTrue(record.status.contains("초기화"))
+        XCTAssertEqual(fake.getDevices(), [device])
+        XCTAssertEqual(fake.getCalls(), [["/usr/bin/xcrun", "simctl", "erase", device.udid]])
+        do { _ = try await engine.execute(preview, keepWarm: [], projects: []); XCTFail("Reused") } catch {}
+        XCTAssertEqual(fake.getCalls().count, 1)
+    }
+    func testBatchTargetsOnlySelectedDevicesAndBlocksChangedAvailability() async throws {
+        let fake = FakeDeveloperTools(), engine = fake.engine()
+        let selected = SimulatorDevice(udid: UUID().uuidString, name: "Old", runtime: "runtime", state: "Shutdown", available: false)
+        let other = SimulatorDevice(udid: UUID().uuidString, name: "Keep", runtime: "runtime", state: "Shutdown", available: true)
+        fake.set(devices: [selected, other])
+        let batch = try await engine.preview(devices: [selected], action: .delete)
+        XCTAssertEqual(batch.items.count, 1)
+        _ = try await engine.execute(batch.items[0], keepWarm: [], projects: [])
+        XCTAssertEqual(fake.getDevices(), [other])
+        XCTAssertEqual(fake.getCalls().first?.last, selected.udid)
+        fake.set(devices: [selected])
+        let changed = try await engine.preview(device: selected)
+        fake.set(devices: [SimulatorDevice(udid: selected.udid, name: selected.name, runtime: selected.runtime, state: "Shutdown", available: true)])
+        do { _ = try await engine.execute(changed, keepWarm: [], projects: []); XCTFail("Changed availability") } catch {}
+        XCTAssertEqual(fake.getCalls().count, 1)
+    }
+    func testCleanupRejectsEmptyDuplicateUnavailableEraseAndRunningDevices() async throws {
+        let fake = FakeDeveloperTools(), engine = fake.engine()
+        let unavailable = SimulatorDevice(udid: UUID().uuidString, name: "Old", runtime: "runtime", state: "Shutdown", available: false)
+        let running = SimulatorDevice(udid: UUID().uuidString, name: "Running", runtime: "runtime", state: "Booted", available: true)
+        fake.set(devices: [unavailable, running])
+        do { _ = try await engine.preview(devices: [], action: .delete); XCTFail("Empty") } catch {}
+        do { _ = try await engine.preview(devices: [unavailable, unavailable], action: .delete); XCTFail("Duplicate") } catch {}
+        do { _ = try await engine.preview(device: unavailable, action: .erase); XCTFail("Unavailable erase") } catch {}
+        do { _ = try await engine.preview(device: running, action: .erase); XCTFail("Running erase") } catch {}
+        XCTAssertTrue(fake.getCalls().isEmpty)
+    }
+    func testEraseCommandFailureIsNotReportedAsSuccess() async throws {
+        let device = SimulatorDevice(udid: UUID().uuidString, name: "Fixture", runtime: "runtime", state: "Shutdown", available: true)
+        let engine = DeveloperActions(readPackages: { _, _ in [] }, readDevices: { [device] }, command: { _, _ in throw CleanupError.blocked("fixture failure") }, idle: { _ in })
+        let preview = try await engine.preview(device: device, action: .erase)
+        do { _ = try await engine.execute(preview, keepWarm: [], projects: []); XCTFail("Failure ignored") } catch {}
+        do { _ = try await engine.execute(preview, keepWarm: [], projects: []); XCTFail("Failure approval reused") } catch {}
     }
     func testSDKRemovalPinsRootAndPackageAndRevalidatesKeepWarm() async throws {
         let raw = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
