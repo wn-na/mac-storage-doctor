@@ -45,7 +45,7 @@ public struct Artifact: Identifiable, Codable, Sendable {
     public var measurement: Measurement
     public var identity: FileIdentity?
     public var scannedAt: Date = Date()
-    public var canTrash: Bool { policy == "xcode-derived-child" && risk == .review && measurement.complete && identity != nil }
+    public var canTrash: Bool { ["xcode-derived-child", "project-generated"].contains(policy) && risk == .review && measurement.complete && identity != nil }
 }
 public struct Volume: Identifiable, Codable, Sendable {
     public var id: String
@@ -80,6 +80,7 @@ public struct CleanupRecord: Identifiable, Codable, Sendable {
     public var after: Int64?
     public var failureReason: String?
     public var trashPath: String?
+    public var recoveryHint: String?
     public var observedDelta: Int64? {
         guard let before, let after else { return nil }
         return after - before

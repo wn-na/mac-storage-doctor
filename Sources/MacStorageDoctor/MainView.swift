@@ -2,24 +2,24 @@ import SwiftUI
 import StorageCore
 
 private enum Page: String, CaseIterable, Identifiable {
-    case overview = "Overview", space = "Space Map", caches = "System & App Caches", projects = "Projects", tools = "Toolchains", cleaner = "Smart Cleaner", history = "History", settings = "Settings & Permissions"
+    case storage = "저장 공간 · 정리", projects = "프로젝트", tools = "SDK · 시뮬레이터", history = "기록", settings = "설정 · 도움말"
     var id: String { rawValue }
     var icon: String {
         switch self {
-        case .overview: "square.grid.2x2"
-        case .space: "chart.pie"
-        case .caches: "externaldrive"
+        case .storage: "externaldrive.badge.checkmark"
         case .projects: "folder"
         case .tools: "hammer"
-        case .cleaner: "sparkles"
         case .history: "clock.arrow.circlepath"
         case .settings: "slider.horizontal.3"
         }
     }
 }
+
 struct MainView: View {
     @EnvironmentObject var model: AppModel
-    @State private var page: Page = .overview
+    @State private var page: Page = .storage
+    @State private var kind: ArtifactKind?
+    @State private var topOnly = true
     @State private var search = ""
     var body: some View {
         NavigationSplitView {
@@ -55,8 +55,8 @@ struct MainView: View {
                         Button(model.paused ? "계속" : "일시정지") { model.togglePause() }
                         Button("취소") { model.cancel() }
                     } else {
-                        Button("빠른 분석") { model.scan(quick: true) }.disabled(model.working)
-                        Button { model.scan() } label: { Label("전체 분석", systemImage: "magnifyingglass") }.buttonStyle(.borderedProminent).tint(.mint).disabled(model.working)
+                        Button("캐시 분석") { model.scan(quick: true) }.disabled(model.working || model.hasApproval)
+                        Button { model.scan() } label: { Label("전체 분석", systemImage: "magnifyingglass") }.buttonStyle(.borderedProminent).tint(.mint).disabled(model.working || model.hasApproval)
                     }
                 }.padding(28)
                 Divider()
@@ -69,6 +69,8 @@ struct MainView: View {
                             Label(model.monitoringStatus, systemImage: "exclamationmark.arrow.triangle.2.circlepath")
                                 .font(.callout).foregroundStyle(.orange)
                         }
+                        if model.working { HStack { ProgressView().controlSize(.small); Text("항목을 확인하고 있습니다…").font(.callout) } }
+                        if let summary = model.cleanupSummary { Text(summary).font(.callout).foregroundStyle(.secondary) }
                         content
                     }.padding(28)
                 }
@@ -82,25 +84,20 @@ struct MainView: View {
         }
         .tint(.mint)
         .alert("작업 안내", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) { Button("확인") { model.error = nil } } message: { Text(model.error ?? "") }
-        .sheet(item: $model.preview) { preview in
-            VStack(alignment: .leading, spacing: 18) {
-                Label("정리 미리보기", systemImage: "trash").font(.title2.bold())
-                Text(preview.artifact.url.path).textSelection(.enabled)
-                Text("할당 용량 \(Format.bytes(preview.artifact.measurement.allocated)) · APFS 공유 블록으로 실제 회수량과 다를 수 있습니다.")
-                Text(preview.artifact.reason).foregroundStyle(.secondary)
-                Text("휴지통으로 이동합니다. 휴지통을 비우기 전에는 공간이 회수되지 않습니다. 앱은 휴지통을 비우지 않습니다.").padding().background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-                HStack { Spacer(); Button("취소") { model.preview = nil }; Button("승인하고 휴지통으로 이동") { model.clean(preview) }.buttonStyle(.borderedProminent) }
-            }.padding(28).frame(width: 560)
-        }
+        .sheet(item: $model.batchPreview) { BatchCleanupSheet(batch: $0).environmentObject(model) }
+        .sheet(item: $model.managedPreview) { ManagedRemovalSheet(preview: $0).environmentObject(model) }
+        .sheet(isPresented: $model.tutorialPresented) { TutorialView().environmentObject(model) }
     }
+
     @ViewBuilder private var content: some View {
         switch page {
-        case .overview: overview
-        case .space: SpaceExplorer()
+        case .storage:
+            HStack { Label("사용 가능한 공간", systemImage: "internaldrive"); Text(model.volume.map { Format.bytes($0.available) } ?? "—").font(.title2.bold()); Spacer(); Text("분석은 기본 수동 · 용량 표시만 60초 갱신").font(.caption).foregroundStyle(.secondary) }
+            inventory(title: "유형별 용량과 정리", artifacts: model.report?.artifacts ?? [])
+            DisclosureGroup("용량 추이 · 분석 범위 설명") { overview }
+            DisclosureGroup("폴더별 용량 탐색") { SpaceExplorer() }
         case .projects: projects
-        case .caches: inventory(title: "시스템과 앱 데이터를 구분합니다", artifacts: (model.report?.artifacts ?? []).filter { $0.projectID == nil })
-        case .tools: tools
-        case .cleaner: inventory(title: "정리 전 영향을 확인하세요", artifacts: model.report?.artifacts ?? [])
+        case .tools: DeveloperManagerView()
         case .history: history
         case .settings: settings
         }
@@ -138,9 +135,8 @@ struct MainView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
             }
             CapacityHistoryView()
-            Text("큰 항목").font(.title3.bold())
-            ForEach(Array((model.report?.artifacts ?? []).sorted { $0.measurement.allocated > $1.measurement.allocated }.prefix(5))) { artifact in artifactRow(artifact) }
-            if model.report == nil { empty("첫 번째 분석을 시작하세요", subtitle: "예시 숫자 대신 현재 Mac의 실제 측정값을 표시합니다.") }
+            if model.report == nil { empty("분석 후 정리할 항목을 선택하세요", subtitle: "‘캐시 분석’은 알려진 공용 항목, ‘전체 분석’은 프로젝트 생성물까지 찾습니다. 분석은 기본 수동입니다.") }
+
         }
     }
     private func metric(_ title: String, amount: Int64, symbol: String, color: Color) -> some View {
@@ -168,59 +164,62 @@ struct MainView: View {
         }
     }
     private func inventory(title: String, artifacts: [Artifact]) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text(title).font(.title3.bold())
-            Text("현재 직접 실행은 검증된 Xcode DerivedData의 휴지통 이동을 지원합니다. 다른 캐시·SDK는 진단과 공식 관리 안내를 제공합니다.").foregroundStyle(.secondary)
-            ForEach(Risk.allCases, id: \.self) { risk in
-                let items = artifacts.filter { $0.risk == risk }
-                if !items.isEmpty { Text(risk.rawValue).font(.headline).padding(.top, 8); ForEach(items) { artifactRow($0) } }
+        let filtered = artifacts.filter { (kind == nil || $0.kind == kind) && (search.isEmpty || ($0.owner + $0.url.path).localizedCaseInsensitiveContains(search)) }
+        let visible = CleanupCatalog.top(filtered, limit: topOnly ? 10 : filtered.count)
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text(title).font(.title3.bold())
+                Spacer()
+                Button("빠른 정리 (\(model.quickItems.count))") { model.prepareBatch(quick: true) }
+                    .disabled(model.quickItems.isEmpty || model.working || model.scanning)
+                    .help("새 분석 없이 재생성 가능한 빌드 생성물만 확인하고 한 번 승인하여 휴지통으로 이동합니다.")
+                Button("선택 정리 (\(model.selectedItems.count))") { model.prepareBatch() }
+                    .buttonStyle(.borderedProminent).disabled(model.selectedItems.isEmpty || model.working || model.scanning)
             }
-            if artifacts.isEmpty { empty("분석 결과 없음", subtitle: "빠른 분석 또는 전체 분석을 실행하세요.") }
+            Text("빠른 정리는 빌드 생성물만, 선택 정리는 체크한 항목만 처리합니다. 실행 전에 변경 여부와 Keep Warm을 다시 확인합니다. 휴지통으로 이동하며 비우기 전에는 공간이 회수되지 않습니다.")
+                .font(.callout).foregroundStyle(.secondary)
+            HStack {
+                TextField("앱 이름 또는 경로 검색", text: $search).textFieldStyle(.roundedBorder)
+                Picker("유형", selection: $kind) {
+                    Text("모든 유형").tag(Optional<ArtifactKind>.none)
+                    ForEach(ArtifactKind.allCases, id: \.self) { Text($0.rawValue).tag(Optional($0)) }
+                }.frame(width: 240)
+                Toggle("용량 상위 10개", isOn: $topOnly).toggleStyle(.switch)
+            }
+            HStack {
+                Button("표시된 정리 가능 항목 선택") { model.selectedArtifacts.formUnion(visible.filter(\.canTrash).map(\.id)) }
+                Button("선택 해제") { model.selectedArtifacts.removeAll() }
+                Spacer()
+                Text("선택 \(Format.bytes(model.selectedItems.reduce(0) { $0 + $1.measurement.allocated })) · \(visible.count)/\(filtered.count)개 표시").font(.caption)
+            }.disabled(model.working || model.scanning)
+            Text("측정된 항목 내 용량 순위입니다. 접근하지 못한 경로는 포함되지 않으며 측정 시점이 다를 수 있습니다.").font(.caption).foregroundStyle(.secondary)
+            ForEach(Array(visible.enumerated()), id: \.element.id) { index, artifact in
+                HStack(alignment: .top) { Text("\(index + 1)").monospacedDigit().foregroundStyle(.secondary).frame(width: 24).padding(.top, 20); artifactRow(artifact) }
+            }
+            if artifacts.isEmpty { empty("분석 결과 없음", subtitle: "상단의 캐시 분석 또는 전체 분석을 한 번 실행하세요.") }
         }
     }
     private func artifactRow(_ artifact: Artifact) -> some View {
-        HStack(spacing: 16) {
-            Image(systemName: artifact.canTrash ? "externaldrive.badge.checkmark" : "lock.shield").font(.title2).foregroundStyle(artifact.canTrash ? .mint : .secondary).frame(width: 35)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(artifact.owner + " · " + artifact.url.lastPathComponent).font(.headline)
-                Text(artifact.url.path).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(artifact.url.path)
+        HStack(alignment: .top, spacing: 14) {
+            Toggle("선택", isOn: Binding(get: { model.selectedArtifacts.contains(artifact.id) }, set: { value in
+                if value { model.selectedArtifacts.insert(artifact.id) } else { model.selectedArtifacts.remove(artifact.id) }
+            })).labelsHidden().toggleStyle(.checkbox).disabled(!artifact.canTrash || model.working || model.scanning)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack { Text(artifact.owner + " · " + artifact.url.lastPathComponent).font(.headline); Text(artifact.kind.rawValue).font(.caption).padding(4).background(.mint.opacity(0.1), in: Capsule()) }
+                Text(artifact.url.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                Text(artifact.cleanupMethod).font(.callout).foregroundStyle(artifact.canTrash ? Color.mint : Color.secondary)
                 Text(artifact.reason).font(.caption).foregroundStyle(.secondary)
-                if !artifact.measurement.complete { Text("일부 파일 측정 불가").font(.caption).foregroundStyle(.orange) }
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 5) {
+                Text("측정: " + artifact.scannedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption2).foregroundStyle(.secondary)
+                if !artifact.measurement.complete { Text("일부 파일 측정 불가 · 정리 제외").font(.caption).foregroundStyle(.orange) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .trailing, spacing: 8) {
                 Text(Format.bytes(artifact.measurement.allocated)).font(.headline.monospacedDigit())
-                Text("논리 \(Format.bytes(artifact.measurement.logical))").font(.caption2).foregroundStyle(.secondary)
+                Button("Finder") { model.reveal(artifact.url) }
+                if artifact.canTrash {
+                    Button("정리") { model.selectedArtifacts = [artifact.id]; model.prepareBatch() }.disabled(model.working || model.scanning)
+                } else if artifact.kind == .sdk { Button("관리") { page = .tools } }
             }
-            Button { model.reveal(artifact.url) } label: { Image(systemName: "folder") }.help("Finder에서 보기")
-            if artifact.canTrash { Button("미리보기") { model.prepare(artifact) }.disabled(model.working || model.scanning) }
         }.padding(16).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
-    }
-    private var tools: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Button("APFS / Time Machine 스냅샷") { model.diagnose(snapshots: true) }
-                Button("Simulator 상태 조회") { model.diagnose(snapshots: false) }
-                Button("Xcode 열기") { model.open(URL(fileURLWithPath: "/Applications/Xcode.app")) }
-                Button("Android Studio 열기") { model.open(URL(fileURLWithPath: "/Applications/Android Studio.app")) }
-            }.disabled(model.working)
-            HStack {
-                Button("설치 도구 / NDK 의존성 확인") { model.inspectToolchains() }
-                Button("MobileAsset 버전별 측정") { model.inspectAssets() }
-            }.disabled(model.working)
-            ForEach(model.installations) { installation in
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) { Text(installation.name + " · " + installation.version).font(.headline); Text(installation.identity).font(.caption).foregroundStyle(.secondary) }
-                    Spacer()
-                    Button("Finder") { model.reveal(installation.url) }
-                }.padding(12).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
-            }
-            ForEach(model.assets) { asset in
-                HStack { Text("iOS " + asset.version + " · " + asset.build); Spacer(); Text(Format.bytes(asset.measurement.allocated)); Label("진단 전용", systemImage: "lock") }.padding(12)
-            }
-            Text(model.diagnostics).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(18).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
-            inventory(title: "설치 데이터와 공유 캐시", artifacts: (model.report?.artifacts ?? []).filter { $0.projectID == nil && $0.risk != .protected })
-        }
     }
     private var history: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -230,6 +229,7 @@ struct MainView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack { Text(record.status).font(.headline); Spacer(); Text(record.date.formatted()).font(.caption).foregroundStyle(.secondary) }
                     Text(record.path).font(.caption).textSelection(.enabled)
+                    if let hint = record.recoveryHint { Text("복원 안내: " + hint).font(.caption).textSelection(.enabled) }
                     if let reason = record.failureReason { Text(reason).foregroundStyle(.orange) }
                     if let delta = record.observedDelta {
                         Text("가용 공간 관측 변화: \(Format.bytes(delta)) · 다른 앱의 쓰기도 포함될 수 있습니다.").foregroundStyle(.secondary)
@@ -248,6 +248,7 @@ struct MainView: View {
     }
     private var settings: some View {
         VStack(alignment: .leading, spacing: 18) {
+            Button { model.tutorialPresented = true } label: { Label("사용법 튜토리얼 다시 보기", systemImage: "questionmark.circle") }
             GroupBox("상단 메뉴바 위젯") {
                 VStack(alignment: .leading, spacing: 12) {
                     Picker("표시 항목", selection: $model.menuBarDisplay) {
@@ -263,6 +264,10 @@ struct MainView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Toggle("전체 분석 이후 프로젝트 변경 감시 (FSEvents)", isOn: $model.monitoring)
                     Text(model.monitoringStatus).font(.caption).foregroundStyle(.secondary)
+                    Picker("변경 분석 최소 간격", selection: $model.incrementalMinutes) {
+                        Text("15분").tag(15); Text("30분").tag(30); Text("60분").tag(60)
+                    }
+                    Text("기본은 수동 분석입니다. 변경 감시를 켜면 이벤트를 모아 지정 간격으로 처리합니다. 60초 용량 표시는 폴더를 재분석하지 않습니다.").font(.caption).foregroundStyle(.secondary)
                     Toggle("앱 실행 중 매일 알려진 캐시 자동 분석", isOn: $model.automatic)
                     Stepper("여유 공간 경고: \(model.warningGB) GiB", value: $model.warningGB, in: 1...500)
                     Text("자동 삭제 없음. 용량은 앱 실행 중 60초마다 갱신됩니다.").font(.caption).foregroundStyle(.secondary)

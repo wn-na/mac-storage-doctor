@@ -3,6 +3,12 @@ import SwiftUI
 import StorageCore
 import ServiceManagement
 
+struct BatchCleanupPreview: Identifiable {
+    let id = UUID()
+    let items: [CleanupPreview]
+    let skipped: [String]
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var volume: Volume?
@@ -21,6 +27,19 @@ final class AppModel: ObservableObject {
     @Published var progress = "검사를 시작하면 실제 측정 결과가 표시됩니다."
     @Published var error: String?
     @Published var preview: CleanupPreview?
+    @Published var batchPreview: BatchCleanupPreview?
+    @Published var managedPreview: ManagedRemovalPreview?
+    @Published var developerInventory = DeveloperInventory()
+    @Published var developerLoaded = false
+    @Published var selectedArtifacts = Set<String>()
+    @Published var cleanupSummary: String?
+    @Published var tutorialPresented = !UserDefaults.standard.bool(forKey: "tutorialCompleted")
+    @Published var incrementalMinutes = max(5, UserDefaults.standard.integer(forKey: "incrementalMinutes") == 0 ? 30 : UserDefaults.standard.integer(forKey: "incrementalMinutes"))
+    private let developerActions = DeveloperActions()
+    private var lastIncremental = Date.distantPast
+    var hasApproval: Bool { preview != nil || batchPreview != nil || managedPreview != nil }
+    var selectedItems: [Artifact] { (report?.artifacts ?? []).filter { selectedArtifacts.contains($0.id) && $0.canTrash } }
+    var quickItems: [Artifact] { (report?.artifacts ?? []).filter { $0.quickEligible && !keepWarm.contains($0.projectID ?? "") } }
     @Published var working = false
     @Published var installations: [ToolInstallation] = []
     @Published var assets: [MobileAsset] = []
@@ -37,7 +56,7 @@ final class AppModel: ObservableObject {
     @Published var loginStatus = ""
     var menuBarLabel: String { MenuBarSummary.label(volume: volume, display: menuBarDisplay) }
     var lowSpace: Bool { MenuBarSummary.isLow(volume: volume, warningGB: warningGB) }
-    @Published var monitoring = UserDefaults.standard.object(forKey: "monitoring") as? Bool ?? true
+    @Published var monitoring = UserDefaults.standard.object(forKey: "monitoring") as? Bool ?? false
     @Published var monitoringStatus = "전체 분석 후 변경 감시 시작"
     @Published var requiresFullRescan = false
     private let watcher = FSEventWatcher()
@@ -49,9 +68,16 @@ final class AppModel: ObservableObject {
     private var repository: SnapshotRepository?
     private var scanTask: Task<Void, Never>?
     private var control = ScanControl()
-    private var lastAutoScan = Date.distantPast
+    private var lastAutoScan = UserDefaults.standard.object(forKey: "lastAutoScan") as? Date ?? Date()
 
     init() {
+        // Migrate the formerly eager defaults once; later explicit choices are respected.
+        if !UserDefaults.standard.bool(forKey: "manualAnalysisDefaultV2") {
+            automatic = false; monitoring = false
+            UserDefaults.standard.set(false, forKey: "automatic")
+            UserDefaults.standard.set(false, forKey: "monitoring")
+            UserDefaults.standard.set(true, forKey: "manualAnalysisDefaultV2")
+        }
         do {
             let dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             repository = try SnapshotRepository(url: dir.appendingPathComponent("MacStorageDoctor/history.sqlite"))
@@ -61,6 +87,7 @@ final class AppModel: ObservableObject {
             await reloadHistory()
             do { report = try await repository?.load(ScanReport.self, kind: "index", limit: 1).first ?? history.first }
             catch { self.error = error.localizedDescription; report = history.first }
+            if let loaded = report { report = CleanupCatalog.upgrade(loaded) }
             if report != nil {
                 requiresFullRescan = true
                 monitoringStatus = "재시작 이후 변경 확인을 위해 전체 분석 필요"
@@ -68,7 +95,7 @@ final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 refreshCapacity()
-                if automatic && !scanning && !working && Date().timeIntervalSince(lastAutoScan) >= 86400 && ProcessInfo.processInfo.thermalState == .nominal {
+                if automatic && !scanning && !working && !hasApproval && AnalysisSchedule.due(last: lastAutoScan, intervalHours: 24) && ProcessInfo.processInfo.thermalState == .nominal {
                     scan(quick: true)
                 }
             }
@@ -130,6 +157,7 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(automatic, forKey: "automatic")
         UserDefaults.standard.set(warningGB, forKey: "warningGB")
         UserDefaults.standard.set(monitoring, forKey: "monitoring")
+        UserDefaults.standard.set(incrementalMinutes, forKey: "incrementalMinutes")
         watcher.stop(); watcherGeneration = UUID()
         pendingEvents = []; debounceTask?.cancel(); debounceTask = nil
         requiresFullRescan = report != nil
@@ -144,10 +172,11 @@ final class AppModel: ObservableObject {
         + ["Library/Mobile Documents", "Library/CloudStorage"].map { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent($0).path }
     }
     func scan(quick: Bool = false) {
-        guard !scanning && !working else { return }
+        guard !scanning && !working && !hasApproval else { return }
         let roots = [VolumeInventory.dataRoot] + volumes.filter { selectedExternal.contains($0.id) && $0.local }.map(\.url)
         if !quick { startWatching(roots: roots) }
         lastAutoScan = Date()
+        UserDefaults.standard.set(lastAutoScan, forKey: "lastAutoScan")
         performScan(ScanOptions(roots: quick ? [] : roots, exclusions: excludedPaths, quick: quick), incremental: false)
     }
     private func startWatching(roots: [URL]) {
@@ -183,18 +212,20 @@ final class AppModel: ObservableObject {
     private func schedulePending() {
         guard monitoring, !requiresFullRescan, !pendingEvents.isEmpty, debounceTask == nil else { return }
         debounceTask = Task {
-            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            do { try await Task.sleep(for: .seconds(AnalysisSchedule.delay(lastIncremental: lastIncremental, minutes: incrementalMinutes))) } catch { return }
             debounceTask = nil
-            guard !scanning && !working else { schedulePending(); return }
+            guard !scanning && !working && !hasApproval else { schedulePending(); return }
             guard let baseline = report else { return }
             let events = pendingEvents; pendingEvents = []
             let plan = IncrementalDiscovery.plan(events: events, projects: baseline.projects, watchedRoots: watchedRoots, exclusions: excludedPaths)
             if plan.requiresFullScan { requireRecovery("대량 변경 감지"); return }
             guard !plan.roots.isEmpty else { return }
+            lastIncremental = Date()
             performScan(ScanOptions(roots: plan.roots, exclusions: excludedPaths, includeInventory: false), incremental: true)
         }
     }
     private func performScan(_ options: ScanOptions, incremental: Bool) {
+        lastIncremental = Date()
         scanning = true; paused = false; control = ScanControl()
         progress = incremental ? "변경된 폴더를 재검사하는 중…" : options.quick ? "알려진 공용 캐시를 측정하는 중…" : "내부 데이터 볼륨에서 프로젝트 탐색 중…"
         let currentControl = control
@@ -210,6 +241,7 @@ final class AppModel: ObservableObject {
             if let baseline, incremental || (result.cancelled && !options.quick) { report = IncrementalDiscovery.merge(baseline, delta: result) }
             else if let baseline, options.quick { report = IncrementalDiscovery.mergeQuick(baseline, quick: result) }
             else { report = result }
+            if let current = report { report = CleanupCatalog.upgrade(current) }
             if result.cancelled && !options.quick { requireRecovery("검사 취소로 변경 반영 중단") }
             progress = result.cancelled ? "검사 취소 · 일부 결과 저장" : "\(result.directories.formatted())개 폴더 검사 · \(result.isPartial ? "부분 검사" : "선택 범위 검사 완료")"
             do {
@@ -217,6 +249,7 @@ final class AppModel: ObservableObject {
                 if let report { try await repository?.save(report, kind: "index", id: "current-index") }
             } catch { self.error = error.localizedDescription; requireRecovery("검사 결과 저장 실패") }
             scanning = false; paused = false; scanTask = nil
+            selectedArtifacts.formIntersection(Set((report?.artifacts ?? []).map(\.id)))
             refreshCapacity(); await reloadHistory(); schedulePending()
         }
     }
@@ -256,6 +289,92 @@ final class AppModel: ObservableObject {
                 catch { self.error = "정리는 완료했으나 검사 인덱스 저장에 실패했습니다: " + error.localizedDescription }
             }
             refreshCapacity()
+        }
+    }
+    func finishTutorial() {
+        UserDefaults.standard.set(true, forKey: "tutorialCompleted")
+        tutorialPresented = false
+    }
+    func prepareBatch(quick: Bool = false) {
+        guard !working && !scanning && !hasApproval else { return }
+        let items = quick ? quickItems : selectedItems
+        guard !items.isEmpty else { error = "정리 가능한 항목이 없습니다. 분석 후 정리할 항목을 선택하세요."; return }
+        working = true; cleanupSummary = "선택 항목의 변경·보호 상태를 확인하는 중…"
+        Task {
+            defer { working = false }
+            var previews: [CleanupPreview] = [], skipped: [String] = []
+            for artifact in items {
+                do { previews.append(try await cleaner.preview(artifact, keepWarm: keepWarm)) }
+                catch { skipped.append(artifact.owner + " / " + artifact.url.lastPathComponent + ": " + error.localizedDescription) }
+            }
+            batchPreview = BatchCleanupPreview(items: previews, skipped: skipped)
+            cleanupSummary = nil
+        }
+    }
+    private func recordCleanup(_ record: CleanupRecord) async {
+        cleanupHistory.insert(record, at: 0)
+        do {
+            guard let repository else { throw RepositoryError.failure("이력 저장소 없음") }
+            try await repository.save(record, kind: "cleanup", id: record.id.uuidString)
+        } catch { self.error = "작업 결과: " + record.status + " · 이력 저장 실패: " + error.localizedDescription }
+    }
+    func cleanBatch(_ batch: BatchCleanupPreview) {
+        guard !working && !scanning else { return }
+        batchPreview = nil; working = true
+        Task {
+            defer { working = false }
+            var success = 0, failed = 0
+            for (index, item) in batch.items.enumerated() {
+                cleanupSummary = "정리 중 \(index + 1)/\(batch.items.count) · \(item.artifact.owner)"
+                let record: CleanupRecord
+                do {
+                    record = try await cleaner.execute(item, keepWarm: keepWarm)
+                    report?.artifacts.removeAll { $0.id == item.artifact.id }
+                    selectedArtifacts.remove(item.artifact.id); success += 1
+                } catch { record = .failed(path: item.artifact.url.path, reason: error.localizedDescription); failed += 1 }
+                await recordCleanup(record)
+            }
+            if let report {
+                do { try await repository?.save(report, kind: "index", id: "current-index") }
+                catch { self.error = "정리 결과 인덱스 저장 실패: " + error.localizedDescription }
+            }
+            cleanupSummary = "휴지통 이동 \(success)개 · 실패 \(failed)개 · 사전 검사 제외 \(batch.skipped.count)개. 공간 회수는 휴지통을 비운 뒤 반영됩니다."
+            refreshCapacity()
+        }
+    }
+    func refreshDeveloperInventory() {
+        guard !working && !scanning && !hasApproval else { return }; working = true
+        Task {
+            developerInventory = await Task.detached(priority: .utility) { DeveloperManager.inventory() }.value
+            developerLoaded = true; working = false
+        }
+    }
+    func prepareSDK(_ package: SDKPackage) {
+        guard !working && !scanning && !hasApproval else { return }; working = true
+        Task {
+            defer { working = false }
+            do { managedPreview = try await developerActions.preview(sdk: package, projects: report?.projects ?? [], keepWarm: keepWarm) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    func prepareDevice(_ device: SimulatorDevice) {
+        guard !working && !scanning && !hasApproval else { return }; working = true
+        Task {
+            defer { working = false }
+            do { managedPreview = try await developerActions.preview(device: device) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    func removeManaged(_ approved: ManagedRemovalPreview) {
+        guard !working && !scanning else { return }; working = true; managedPreview = nil
+        Task {
+            let record: CleanupRecord
+            do { record = try await developerActions.execute(approved, keepWarm: keepWarm, projects: report?.projects ?? []) }
+            catch { record = .failed(path: approved.sdk?.location.path ?? approved.device?.udid ?? approved.title, reason: error.localizedDescription); self.error = error.localizedDescription }
+            await recordCleanup(record)
+            developerInventory = await Task.detached(priority: .utility) { DeveloperManager.inventory() }.value
+            cleanupSummary = record.status
+            working = false; refreshCapacity()
         }
     }
     func reloadHistory() async {

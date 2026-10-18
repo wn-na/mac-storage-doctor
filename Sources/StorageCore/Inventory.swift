@@ -15,7 +15,8 @@ public enum Inventory {
             if p.platforms.contains(.apple) { paths += ["Pods", "ios/Pods"] }
             if p.platforms.contains(.swift) { paths += [".build"] }
             for path in Set(paths) {
-                add(p.root.appendingPathComponent(path), p.name, .review, "project-diagnosis", "재빌드·의존성 재설치 필요. 프로젝트의 공식 도구에서 정리하세요.", project: p.id)
+                let executable = CleanupCatalog.allowedPaths(p).contains(path)
+                add(p.root.appendingPathComponent(path), p.name, .review, executable ? "project-generated" : "project-diagnosis", executable ? "재생성 가능한 프로젝트 생성물. 로컬 수정은 휴지통에서 복원해야 하며 재빌드·의존성 재설치가 필요합니다." : "공식 도구에서 관리하세요. 로컬 소스가 섞일 수 있어 직접 정리에서 제외합니다.", project: p.id)
             }
         }
         guard includeShared else { return items }
