@@ -2,7 +2,7 @@ import Foundation
 
 public enum ProjectClassifier {
     public static func detect(_ root: URL) -> Project? {
-        guard let children = try? FileSystem.children(root) else { return nil }
+        guard !ProjectDiscoveryPolicy.isExcluded(root), let children = try? FileSystem.children(root) else { return nil }
         let names = Set(children.map(\.lastPathComponent))
         var platforms = Set<Platform>(), evidence: [String] = []
         if let text = FileSystem.readText(root.appendingPathComponent("package.json")),
@@ -76,7 +76,6 @@ public struct ScanOptions: Sendable {
     }
 }
 public enum Scanner {
-    private static let pruned: Set<String> = ["node_modules", ".git", ".gradle", ".build", ".dart_tool", "Pods", "DerivedData", ".Trash"]
     public static func scan(_ options: ScanOptions, control: ScanControl = ScanControl(), progress: @escaping @Sendable (Int, String) async -> Void = { _, _ in }) async -> ScanReport {
         var report = ScanReport(); report.roots = options.roots; report.mode = options.quick ? "빠른 분석" : "전체 분석"
         let defaultCloudExclusions = ["Library/Mobile Documents", "Library/CloudStorage"].map { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent($0).path }
@@ -87,6 +86,9 @@ public enum Scanner {
             var queue = [root]
             while let directory = queue.popLast() {
                 do { try await control.checkpoint() } catch { report.cancelled = true; break }
+                if ProjectDiscoveryPolicy.isExcluded(directory) {
+                    report.issues.append(.init(directory.path, "도구 캐시·설치 의존성: 프로젝트 탐색 제외")); continue
+                }
                 if exclusions.contains(where: { FileSystem.canonicalPath(directory) == $0 || FileSystem.canonicalPath(directory).hasPrefix($0 + "/") }) {
                     report.issues.append(.init(directory.path, "사용자 제외")); continue
                 }
@@ -99,7 +101,7 @@ public enum Scanner {
                     if report.directories % 100 == 0 { await progress(report.directories, directory.path) }
                     if let project = ProjectClassifier.detect(directory) { report.projects.append(project) }
                     for child in try FileSystem.children(directory) {
-                        if pruned.contains(child.lastPathComponent) || child.pathExtension == "app" || child.pathExtension == "xcodeproj" {
+                        if ProjectDiscoveryPolicy.isExcluded(child) || child.pathExtension == "xcodeproj" {
                             report.issues.append(.init(child.path, "생성물·저장소 메타데이터·앱 번들: 프로젝트 내부 탐색 생략")); continue
                         }
                         if let m = try? FileSystem.metadata(child), FileSystem.isDirectory(m) { queue.append(FileSystem.visibleURL(child)) }

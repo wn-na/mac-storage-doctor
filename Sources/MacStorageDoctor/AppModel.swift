@@ -31,6 +31,7 @@ final class AppModel: ObservableObject {
     @Published var managedPreview: ManagedRemovalPreview?
     @Published var developerInventory = DeveloperInventory()
     @Published var developerLoaded = false
+    @Published var developerSizesRequested = false
     @Published var selectedArtifacts = Set<String>()
     @Published var cleanupSummary: String?
     @Published var tutorialPresented = !UserDefaults.standard.bool(forKey: "tutorialCompleted")
@@ -342,10 +343,11 @@ final class AppModel: ObservableObject {
             refreshCapacity()
         }
     }
-    func refreshDeveloperInventory() {
+    func refreshDeveloperInventory(measureSizes: Bool = false) {
         guard !working && !scanning && !hasApproval else { return }; working = true
         Task {
-            developerInventory = await Task.detached(priority: .utility) { DeveloperManager.inventory() }.value
+            developerInventory = await Task.detached(priority: .utility) { DeveloperManager.inventory(measureSizes: measureSizes) }.value
+            developerSizesRequested = measureSizes
             developerLoaded = true; working = false
         }
     }
@@ -373,6 +375,7 @@ final class AppModel: ObservableObject {
             catch { record = .failed(path: approved.sdk?.location.path ?? approved.device?.udid ?? approved.title, reason: error.localizedDescription); self.error = error.localizedDescription }
             await recordCleanup(record)
             developerInventory = await Task.detached(priority: .utility) { DeveloperManager.inventory() }.value
+            developerSizesRequested = false
             cleanupSummary = record.status
             working = false; refreshCapacity()
         }

@@ -21,10 +21,10 @@ public extension Artifact {
 }
 public enum CleanupCatalog {
     public static func upgrade(_ report: ScanReport) -> ScanReport {
-        var updated = report
-        updated.artifacts = report.artifacts.map { original in
+        var updated = ProjectDiscoveryPolicy.removeCachedProjects(from: report)
+        updated.artifacts = updated.artifacts.map { original in
             var item = original
-            if item.policy == "project-diagnosis", let project = report.projects.first(where: { $0.id == item.projectID }),
+            if item.policy == "project-diagnosis", let project = updated.projects.first(where: { $0.id == item.projectID }),
                allowedPaths(project).contains(where: { project.root.appendingPathComponent($0) == item.url }) {
                 item.policy = "project-generated"
                 item.reason = "재빌드·의존성 재설치가 필요합니다. 로컬 수정은 휴지통에서 복원하세요. 실행 전 프로젝트와 경로를 재검증합니다."

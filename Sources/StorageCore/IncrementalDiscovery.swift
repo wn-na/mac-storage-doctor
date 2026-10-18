@@ -32,9 +32,8 @@ public enum IncrementalDiscovery {
     public static func relevant(_ event: DirectoryEvent, exclusions: [String]) -> Bool {
         if event.requiresFullScan { return true }
         let url = URL(fileURLWithPath: normalizedPath(event.path))
-        let generated: Set<String> = ["node_modules", ".git", ".gradle", ".build", ".dart_tool", "Pods", "DerivedData", ".Trash"]
         let signatures: Set<String> = ["package.json", "pubspec.yaml", "Package.swift", "settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts", "gradlew", "project.pbxproj"]
-        guard !url.pathComponents.contains(where: { generated.contains($0) || $0.hasSuffix(".app") }),
+        guard !ProjectDiscoveryPolicy.isExcluded(url),
               !exclusions.contains(where: { contains($0, url.path) }) else { return false }
         let directoryChange = event.flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0 && event.flags & UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed) != 0
         return signatures.contains(url.lastPathComponent) || url.pathExtension == "xcodeproj" || directoryChange || event.flags & UInt32(kFSEventStreamEventFlagMustScanSubDirs) != 0

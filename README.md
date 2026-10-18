@@ -32,6 +32,7 @@ swift test --disable-sandbox --cache-path .build/cache
 - 내부 Data 볼륨 전체에서 취소 가능한 프로젝트 탐색, 숨김 폴더 탐색, 외장 볼륨 선택
 - RN/Expo, Flutter, Android, Xcode, Swift Package, Node 탐지와 네이티브 하위 프로젝트 묶기
 - 알려진 캐시·앱 데이터·프로젝트 생성물 용량 측정, 프로젝트 Keep Warm
+- npm·Gradle·CocoaPods 등 도구 캐시는 프로젝트에서 제외하고 용량만 측정
 - 경로 제외, 생성물 내부 탐색 생략, 접근 오류와 볼륨 경계 기록
 - 링크를 따라가지 않는 파일 측정, 측정 대상 내부 하드링크 중복 제외, 논리/할당 용량 분리
 - 폴더별 탐색과 크기 막대, Finder 연결
@@ -40,7 +41,8 @@ swift test --disable-sandbox --cache-path .build/cache
 - 첫 실행 5단계 튜토리얼, 설정에서 사용법 다시 보기
 - 저장 공간·캐시·정리 메뉴 통합, 유형 필터·용량 상위 10개·다중 선택
 - 검증된 DerivedData와 프로젝트 생성물의 선택 정리·빠른 정리 → 일괄 승인 → 휴지통 이동
-- SDK 버전별 목록·용량·공식 제거·재설치 명령 안내, Simulator 기기 목록·상태·개별 삭제
+- SDK·Simulator 화면 최초 진입 시 목록 표시, 종류별 탭과 개수, 용량 측정은 별도 수동 실행
+- SDK 공식 제거·재설치 명령 안내, Simulator 기기 상태·개별 삭제
 - 실행 전 상태 재검증, Keep Warm·알려진 프로젝트/AVD 참조 검사
 - SQLite 검사·정리 이력, 실패 사유와 측정 불가 구분, 이동한 휴지통 항목의 Finder 연결
 - 사용자 홈을 마스킹한 JSON 보고서

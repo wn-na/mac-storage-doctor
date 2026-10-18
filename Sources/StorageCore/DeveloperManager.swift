@@ -87,7 +87,7 @@ public enum DeveloperManager {
         let output = try ManagedCommand.checked("/usr/bin/xcrun", ["simctl", "list", "--json"])
         return try parseSimulators(Data(output.utf8))
     }
-    public static func inventory(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> DeveloperInventory {
+    public static func inventory(home: URL = FileManager.default.homeDirectoryForCurrentUser, measureSizes: Bool = false) -> DeveloperInventory {
         var result = DeveloperInventory()
         var roots = Set([home.appendingPathComponent("Library/Android/sdk").path])
         for key in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
@@ -103,22 +103,23 @@ public enum DeveloperManager {
                 return $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedDescending
             }
             guard let manager = versions.map({ $0.appendingPathComponent("bin/sdkmanager") }).first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
-                result.issues.append("\(path): Android Studio의 SDK Tools에서 Command-line Tools를 설치하세요."); continue
+                result.issues.append("Android SDK · \(path): Android Studio의 SDK Tools에서 Command-line Tools를 설치하세요."); continue
             }
             do {
                 for var package in try installed(root, manager: manager) {
-                    if FileSystem.canonicalPath(package.location).hasPrefix(root.path + "/") {
+                    if measureSizes && FileSystem.canonicalPath(package.location).hasPrefix(root.path + "/") {
                         let measurement = FileSystem.measure(package.location)
                         package.bytes = measurement.complete ? measurement.allocated : nil
                     }
                     if !result.packages.contains(where: { $0.id == package.id }) { result.packages.append(package) }
                 }
-            } catch { result.issues.append(error.localizedDescription) }
+            } catch { result.issues.append("Android SDK: " + error.localizedDescription) }
         }
         do {
             let (devices, runtimes) = try simulators()
             result.runtimes = runtimes
             result.devices = devices.map { device in
+                guard measureSizes else { return device }
                 var measured = device
                 let path = home.appendingPathComponent("Library/Developer/CoreSimulator/Devices/\(device.udid)")
                 let size = FileSystem.measure(path)
