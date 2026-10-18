@@ -1,28 +1,49 @@
-#!/bin/zsh
+#!/bin/bash
 set -euo pipefail
-cd "${0:A:h:h}"
+cd "$(dirname "$0")/.."
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/ModuleCache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build/ModuleCache"
-swift build -c release --disable-sandbox --cache-path "$PWD/.build/cache"
-APP="$PWD/dist/Mac Storage Doctor.app"
+VERSION="${VERSION:-$(cat VERSION)}"
+BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD)}"
+BUILD_ARCHS="${BUILD_ARCHS:-$(uname -m)}"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'VERSION must be major.minor.patch' >&2; exit 1; }
+[[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || { echo 'BUILD_NUMBER must be numeric' >&2; exit 1; }
+mkdir -p .build dist
+STAGE=$(mktemp -d "$PWD/.build/app-stage.XXXXXX")
+trap 'rm -rf "$STAGE"' EXIT
+APP="$STAGE/Mac Storage Doctor.app"
 mkdir -p "$APP/Contents/MacOS"
-cp .build/release/MacStorageDoctor "$APP/Contents/MacOS/MacStorageDoctor"
-cat > "$APP/Contents/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>MacStorageDoctor</string>
-<key>CFBundleIdentifier</key><string>dev.macstoragedoctor.app</string>
-<key>CFBundleName</key><string>Mac Storage Doctor</string>
-<key>CFBundleDisplayName</key><string>Mac Storage Doctor</string>
-<key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.2.0</string>
-<key>CFBundleVersion</key><string>2</string>
-<key>LSMinimumSystemVersion</key><string>14.0</string>
-<key>NSHighResolutionCapable</key><true/>
-<key>NSPrincipalClass</key><string>NSApplication</string>
-<key>NSHumanReadableCopyright</key><string>Mac Storage Doctor</string>
-</dict></plist>
-PLIST
-codesign --force --sign - "$APP"
-print "Built: $APP"
+BINARIES=()
+for ARCH in $BUILD_ARCHS; do
+    [[ "$ARCH" == arm64 || "$ARCH" == x86_64 ]] || { echo "Unsupported architecture: $ARCH" >&2; exit 1; }
+    ARGS=(-c release --arch "$ARCH" --scratch-path "$PWD/.build/package-$ARCH" --disable-sandbox --cache-path "$PWD/.build/cache")
+    swift build "${ARGS[@]}"
+    BIN_DIR=$(swift build "${ARGS[@]}" --show-bin-path)
+    BINARIES+=("$BIN_DIR/MacStorageDoctor")
+done
+[[ ${#BINARIES[@]} -gt 0 ]] || exit 1
+if [[ ${#BINARIES[@]} == 1 ]]; then
+    cp "${BINARIES[0]}" "$APP/Contents/MacOS/MacStorageDoctor"
+else
+    lipo -create "${BINARIES[@]}" -output "$APP/Contents/MacOS/MacStorageDoctor"
+fi
+export VERSION BUILD_NUMBER APP
+python3 - <<'PY'
+import os, plistlib
+info = dict(CFBundleExecutable='MacStorageDoctor', CFBundleIdentifier='dev.macstoragedoctor.app',
+    CFBundleName='Mac Storage Doctor', CFBundleDisplayName='Mac Storage Doctor', CFBundlePackageType='APPL',
+    CFBundleShortVersionString=os.environ['VERSION'], CFBundleVersion=os.environ['BUILD_NUMBER'],
+    LSMinimumSystemVersion='14.0', LSUIElement=True, NSHighResolutionCapable=True, NSPrincipalClass='NSApplication',
+    NSHumanReadableCopyright='Mac Storage Doctor')
+with open(os.path.join(os.environ['APP'], 'Contents/Info.plist'), 'wb') as f: plistlib.dump(info, f)
+PY
+if [[ -n "${APP_SIGN_IDENTITY:-}" ]]; then
+    codesign --force --options runtime --timestamp --sign "$APP_SIGN_IDENTITY" "$APP"
+else
+    codesign --force --sign - "$APP"
+fi
+codesign --verify --strict --verbose=2 "$APP"
+lipo -archs "$APP/Contents/MacOS/MacStorageDoctor"
+rm -rf "$PWD/dist/Mac Storage Doctor.app"
+mv "$APP" "$PWD/dist/Mac Storage Doctor.app"
+echo "Built: $PWD/dist/Mac Storage Doctor.app"

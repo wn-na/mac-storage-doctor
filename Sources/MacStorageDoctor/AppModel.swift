@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import StorageCore
+import ServiceManagement
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -23,6 +24,13 @@ final class AppModel: ObservableObject {
     @Published var exclusions = UserDefaults.standard.string(forKey: "exclusions") ?? ""
     @Published var automatic = UserDefaults.standard.bool(forKey: "automatic")
     @Published var warningGB = max(1, UserDefaults.standard.integer(forKey: "warningGB") == 0 ? 50 : UserDefaults.standard.integer(forKey: "warningGB"))
+    @Published var menuBarDisplay = MenuBarDisplay(rawValue: UserDefaults.standard.string(forKey: "menuBarDisplay") ?? "") ?? .available {
+        didSet { UserDefaults.standard.set(menuBarDisplay.rawValue, forKey: "menuBarDisplay") }
+    }
+    @Published var loginEnabled = false
+    @Published var loginStatus = ""
+    var menuBarLabel: String { MenuBarSummary.label(volume: volume, display: menuBarDisplay) }
+    var lowSpace: Bool { MenuBarSummary.isLow(volume: volume, warningGB: warningGB) }
     @Published var monitoring = UserDefaults.standard.object(forKey: "monitoring") as? Bool ?? true
     @Published var monitoringStatus = "전체 분석 후 변경 감시 시작"
     @Published var requiresFullRescan = false
@@ -60,7 +68,33 @@ final class AppModel: ObservableObject {
             }
         }
     }
-    func refreshCapacity() { volume = try? VolumeInventory.read(VolumeInventory.dataRoot); volumes = VolumeInventory.mounted() }
+    func refreshCapacity() {
+        volume = try? VolumeInventory.read(VolumeInventory.dataRoot); volumes = VolumeInventory.mounted()
+        refreshLoginStatus()
+    }
+    func refreshLoginStatus() {
+        let status = SMAppService.mainApp.status
+        loginEnabled = status == .enabled || status == .requiresApproval
+        switch status {
+        case .enabled: loginStatus = "로그인 시 메뉴바에서 자동 실행됩니다."
+        case .requiresApproval: loginStatus = "시스템 설정 > 로그인 항목에서 승인이 필요합니다."
+        case .notRegistered: loginStatus = "로그인 자동 실행 꺼짐"
+        case .notFound: loginStatus = "Applications에 설치한 앱에서 설정하세요."
+        @unknown default: loginStatus = "로그인 항목 상태를 확인할 수 없습니다."
+        }
+    }
+    func setLoginEnabled(_ enabled: Bool) {
+        guard Bundle.main.bundleURL.path.hasPrefix("/Applications/") else {
+            error = "PKG로 Applications에 설치한 앱에서 로그인 자동 실행을 설정하세요."
+            return
+        }
+        do {
+            if enabled { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+        } catch { self.error = error.localizedDescription }
+        refreshLoginStatus()
+    }
+    func openLoginSettings() { SMAppService.openSystemSettingsLoginItems() }
     func persistSettings() {
         UserDefaults.standard.set(exclusions, forKey: "exclusions")
         UserDefaults.standard.set(automatic, forKey: "automatic")

@@ -235,6 +235,17 @@ struct MainView: View {
     }
     private var settings: some View {
         VStack(alignment: .leading, spacing: 18) {
+            GroupBox("상단 메뉴바 위젯") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("표시 항목", selection: $model.menuBarDisplay) {
+                        ForEach(MenuBarDisplay.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }.pickerStyle(.segmented)
+                    Text("60초마다 갱신합니다. 상세 창을 닫아도 메뉴바에 유지되며 Dock에는 표시하지 않습니다.").font(.caption).foregroundStyle(.secondary)
+                    Toggle("로그인 시 자동 실행", isOn: Binding(get: { model.loginEnabled }, set: { model.setLoginEnabled($0) }))
+                    Text(model.loginStatus).font(.caption).foregroundStyle(.secondary)
+                    Button("macOS 로그인 항목 설정") { model.openLoginSettings() }
+                }.padding(12)
+            }
             GroupBox("점검 설정") {
                 VStack(alignment: .leading, spacing: 14) {
                     Toggle("전체 분석 이후 프로젝트 변경 감시 (FSEvents)", isOn: $model.monitoring)

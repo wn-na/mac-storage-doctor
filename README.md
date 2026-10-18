@@ -1,6 +1,12 @@
 # Mac Storage Doctor
 
-macOS 14+용 Swift 6 / SwiftUI 메뉴바 저장 공간 분석 앱. 제공된 v1.2 설계를 기반으로 만든 **0.2 개발 버전**입니다. 설계 전체가 구현된 v1.2 출시본은 아닙니다.
+macOS 14+용 Swift 6 / SwiftUI 메뉴바 저장 공간 분석 앱. 제공된 v1.2 설계를 기반으로 만든 **0.3 개발 버전**입니다. 설계 전체가 구현된 v1.2 출시본은 아닙니다.
+
+## 설치 파일
+
+[GitHub Releases](https://github.com/wn-na/mac-storage-doctor/releases)에서 Universal `.pkg`를 제공합니다. 현재 개발용 미서명 프리릴리스는 Gatekeeper가 차단할 수 있습니다. [배포 및 정식 서명 안내](docs/RELEASING.md)를 확인하세요.
+
+상단 메뉴바에 여유 공간·사용 공간·사용률을 표시하고 60초마다 갱신합니다. 상세 창을 닫아도 유지됩니다. Applications에 설치한 뒤 설정에서 로그인 시 자동 실행을 켤 수 있습니다.
 
 ## 빌드와 실행
 
@@ -66,7 +72,7 @@ Full Disk Access는 설정 화면에서 사용자가 허용할 수 있습니다.
 
 ## 남은 출시 작업
 
-[구현 상태 및 수용 기준](docs/IMPLEMENTATION_STATUS.md)을 확인하세요. Spotlight, 재시작 시 FSEvents 이력 재생, 공식 패키지 캐시 실행, SDK 삭제·복원, Simulator 삭제, 앱별 세부 캐시 정책, 로그인 항목·시스템 알림, 히스토리 집계와 배포 공증은 미구현입니다.
+[구현 상태 및 수용 기준](docs/IMPLEMENTATION_STATUS.md)을 확인하세요. Spotlight, 재시작 시 FSEvents 이력 재생, 공식 패키지 캐시 실행, SDK 삭제·복원, Simulator 삭제, 앱별 세부 캐시 정책, 시스템 알림, 히스토리 집계와 배포 공증은 미구현입니다.
 
 ## 구조
 

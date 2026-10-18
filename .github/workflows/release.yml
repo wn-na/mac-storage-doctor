@@ -1,0 +1,104 @@
+name: Release PKG
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish the existing vVERSION tag to GitHub Releases'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      SIGNING_ENABLED: ${{ vars.APPLE_SIGNING_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate release version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cat VERSION)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [[ "$REF_TYPE" == tag ]]; then
+            [[ "$REF_NAME" == "v$version" ]] || { echo 'Tag and VERSION differ'; exit 1; }
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - name: Test before packaging
+        run: swift test
+      - name: Prepare Developer ID signing and notarization
+        if: env.SIGNING_ENABLED == 'true'
+        env:
+          DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APP_SIGN_IDENTITY: ${{ secrets.APP_SIGN_IDENTITY }}
+          PKG_SIGN_IDENTITY: ${{ secrets.PKG_SIGN_IDENTITY }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: ./scripts/ci-signing.sh
+      - name: Build universal PKG
+        env:
+          APP_SIGN_IDENTITY: ${{ env.SIGNING_ENABLED == 'true' && secrets.APP_SIGN_IDENTITY || '' }}
+          PKG_SIGN_IDENTITY: ${{ env.SIGNING_ENABLED == 'true' && secrets.PKG_SIGN_IDENTITY || '' }}
+        run: ./scripts/build-pkg.sh
+      - name: Upload installer and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacStorageDoctor-${{ steps.version.outputs.value }}-pkg
+          path: |
+            dist/*.pkg
+            dist/*.sha256
+          if-no-files-found: error
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag' || inputs.publish == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$RELEASE_VERSION"
+          # A manually dispatched release must still refer to this exact commit.
+          [[ "$(git rev-parse "$tag^{commit}")" == "$(git rev-parse HEAD)" ]]
+          args=()
+          if [[ "$SIGNING_ENABLED" != true || "$RELEASE_VERSION" == 0.* ]]; then args+=(--prerelease); fi
+          {
+            echo 'macOS 14+ · Apple Silicon and Intel (universal binary)'
+            echo
+            echo 'Install destination: /Applications/Mac Storage Doctor.app'
+            echo 'This installer contains no preinstall or postinstall scripts.'
+            echo 'See README and docs/IMPLEMENTATION_STATUS.md for supported features and known limitations.'
+            echo
+            if [[ "$SIGNING_ENABLED" == true ]]; then
+              echo 'Developer ID signed and notarized. SHA-256 checksums are attached.'
+            else
+              echo '**Unsigned development preview:** the app has an ad-hoc signature; the installer is not Developer ID signed or notarized. Gatekeeper may block installation. This is not a trusted production installer.'
+            fi
+          } > "$RUNNER_TEMP/release-notes.md"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --verify-tag --draft --title "Mac Storage Doctor $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" ${args[@]+"${args[@]}"}
+          fi
+          # Do not silently replace assets on a published release.
+          gh release upload "$tag" dist/*.pkg dist/*.sha256
+          gh release edit "$tag" --draft=false
+      - name: Remove temporary signing keychain
+        if: always() && env.SIGNING_ENABLED == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/storage-doctor-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/storage-doctor-signing.p12"
