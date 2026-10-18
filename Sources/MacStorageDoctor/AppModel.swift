@@ -7,6 +7,12 @@ import ServiceManagement
 final class AppModel: ObservableObject {
     @Published var volume: Volume?
     @Published var volumes: [Volume] = []
+    @Published var capacityPoints: [CapacityPoint] = []
+    @Published var capacityError: String?
+    @Published var capacityRange: CapacityRange = .month {
+        didSet { updateCapacityHistory() }
+    }
+    private var capacityRequest = UUID()
     @Published var report: ScanReport?
     @Published var history: [ScanReport] = []
     @Published var cleanupHistory: [CleanupRecord] = []
@@ -71,6 +77,30 @@ final class AppModel: ObservableObject {
     func refreshCapacity() {
         volume = try? VolumeInventory.read(VolumeInventory.dataRoot); volumes = VolumeInventory.mounted()
         refreshLoginStatus()
+        updateCapacityHistory(record: true)
+    }
+    private func updateCapacityHistory(record: Bool = false) {
+        let request = UUID(); capacityRequest = request
+        guard let volume else {
+            capacityPoints = []; capacityError = "현재 볼륨 용량을 읽을 수 없습니다."
+            return
+        }
+        let range = capacityRange
+        Task {
+            do {
+                guard let repository else { throw RepositoryError.failure("이력 저장소를 열 수 없습니다.") }
+                if record { try await repository.recordCapacity(volume) }
+                let points = try await repository.capacity(volumeID: volume.id, since: range.start())
+                let aggregated = await Task.detached(priority: .utility) {
+                    CapacityHistory.aggregate(points, resolution: range.resolution)
+                }.value
+                guard capacityRequest == request else { return }
+                capacityPoints = aggregated; capacityError = nil
+            } catch {
+                guard capacityRequest == request else { return }
+                capacityPoints = []; capacityError = "용량 이력 저장·조회 실패: " + error.localizedDescription
+            }
+        }
     }
     func refreshLoginStatus() {
         let status = SMAppService.mainApp.status
@@ -206,15 +236,26 @@ final class AppModel: ObservableObject {
         guard !working && !scanning else { return }; working = true; preview = nil
         Task {
             defer { working = false }
+            let record: CleanupRecord
             do {
-                let record = try await cleaner.execute(approved, keepWarm: keepWarm)
-                // Keep the visible result even if persistent storage fails.
-                cleanupHistory.insert(record, at: 0)
+                record = try await cleaner.execute(approved, keepWarm: keepWarm)
                 report?.artifacts.removeAll { $0.id == approved.artifact.id }
-                if let report { try await repository?.save(report, kind: "index", id: "current-index") }
-                try await repository?.save(record, kind: "cleanup", id: record.id.uuidString)
-                refreshCapacity()
-            } catch { self.error = error.localizedDescription }
+            } catch {
+                record = .failed(path: approved.artifact.url.path, reason: error.localizedDescription)
+                self.error = error.localizedDescription
+            }
+            // Show the operation outcome even when writing its audit record fails.
+            cleanupHistory.insert(record, at: 0)
+            do {
+                guard let repository else { throw RepositoryError.failure("이력 저장소를 열 수 없습니다.") }
+                try await repository.save(record, kind: "cleanup", id: record.id.uuidString)
+            }
+            catch { self.error = record.status + " · 이력 저장 실패: " + error.localizedDescription }
+            if record.failureReason == nil, let report {
+                do { try await repository?.save(report, kind: "index", id: "current-index") }
+                catch { self.error = "정리는 완료했으나 검사 인덱스 저장에 실패했습니다: " + error.localizedDescription }
+            }
+            refreshCapacity()
         }
     }
     func reloadHistory() async {

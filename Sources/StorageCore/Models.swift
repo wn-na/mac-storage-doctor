@@ -76,9 +76,17 @@ public struct CleanupRecord: Identifiable, Codable, Sendable {
     public var date = Date()
     public var path: String
     public var status: String
-    public var before: Int64
-    public var after: Int64
-    public var observedDelta: Int64 { after - before }
+    public var before: Int64?
+    public var after: Int64?
+    public var failureReason: String?
+    public var trashPath: String?
+    public var observedDelta: Int64? {
+        guard let before, let after else { return nil }
+        return after - before
+    }
+    public static func failed(path: String, reason: String) -> CleanupRecord {
+        CleanupRecord(path: path, status: "정리 실패 또는 안전 검사에서 중단", failureReason: reason)
+    }
 }
 public enum Format {
     public static func bytes(_ value: Int64) -> String {

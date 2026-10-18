@@ -78,7 +78,7 @@ public actor CleanupEngine {
         try CleanupValidator.validate(preview.artifact, keepWarm: keepWarm)
         var trashURL: NSURL?
         try FileManager.default.trashItem(at: preview.artifact.url, resultingItemURL: &trashURL)
-        let after = (try? VolumeInventory.read(preview.artifact.url.deletingLastPathComponent()).available) ?? before
-        return CleanupRecord(path: preview.artifact.url.path, status: "휴지통 이동 완료 · 비우기 전 미회수", before: before, after: after)
+        let after = try? VolumeInventory.read(preview.artifact.url.deletingLastPathComponent()).available
+        return CleanupRecord(path: preview.artifact.url.path, status: "휴지통 이동 완료 · 비우기 전 미회수", before: before, after: after, trashPath: trashURL?.path)
     }
 }

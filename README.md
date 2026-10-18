@@ -28,6 +28,7 @@ swift test --disable-sandbox --cache-path .build/cache
 ## 현재 제공하는 기능
 
 - 실제 볼륨 가용 공간 표시와 60초 갱신, 메뉴바 팝오버, 8개 상세 화면
+- 용량 이력 영속화, 24시간/30일/12개월/전체 차트, 30일 상세·주별·월별 자동 집계
 - 내부 Data 볼륨 전체에서 취소 가능한 프로젝트 탐색, 숨김 폴더 탐색, 외장 볼륨 선택
 - RN/Expo, Flutter, Android, Xcode, Swift Package, Node 탐지와 네이티브 하위 프로젝트 묶기
 - 알려진 캐시·앱 데이터·프로젝트 생성물 용량 측정, 프로젝트 Keep Warm
@@ -37,7 +38,8 @@ swift test --disable-sandbox --cache-path .build/cache
 - 앱 번들 ID 기반 IDE 구분, SDK/NDK/버전 관리자 설치 목록, 직접 지정된 NDK 요구 버전 진단
 - APFS/Time Machine 스냅샷, simctl 읽기 전용 조회, MobileAsset 버전·빌드별 측정
 - 검증된 Xcode DerivedData의 미리보기 → 개별 승인 → 휴지통 이동 → 전후 가용 공간 기록
-- SQLite 검사·정리 이력, 사용자 홈을 마스킹한 JSON 보고서
+- SQLite 검사·정리 이력, 실패 사유와 측정 불가 구분, 이동한 휴지통 항목의 Finder 연결
+- 사용자 홈을 마스킹한 JSON 보고서
 - FSEvents 기반 프로젝트 증분 재검사, 변경 이벤트 병합과 이벤트 유실 시 복구 안내
 - 빠른 분석과 별도로 유지되는 SQLite 프로젝트 인덱스
 - 앱 실행 중 일일 캐시 분석 선택, 여유 공간 경고 기준 설정
@@ -72,7 +74,7 @@ Full Disk Access는 설정 화면에서 사용자가 허용할 수 있습니다.
 
 ## 남은 출시 작업
 
-[구현 상태 및 수용 기준](docs/IMPLEMENTATION_STATUS.md)을 확인하세요. Spotlight, 재시작 시 FSEvents 이력 재생, 공식 패키지 캐시 실행, SDK 삭제·복원, Simulator 삭제, 앱별 세부 캐시 정책, 시스템 알림, 히스토리 집계와 배포 공증은 미구현입니다.
+[구현 상태 및 수용 기준](docs/IMPLEMENTATION_STATUS.md)을 확인하세요. Spotlight, 재시작 시 FSEvents 이력 재생, 공식 패키지 캐시 실행, SDK 삭제·복원, Simulator 삭제, 앱별 세부 캐시 정책, 시스템 알림, 프로젝트별 이력 비교와 배포 공증은 미구현입니다.
 
 ## 구조
 

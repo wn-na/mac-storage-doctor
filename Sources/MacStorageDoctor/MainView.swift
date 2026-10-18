@@ -137,6 +137,7 @@ struct MainView: View {
                     Text("빠른 분석은 알려진 캐시만 측정합니다. 전체 분석은 내부 데이터 볼륨에서 프로젝트를 탐색하며 숨김 폴더도 포함합니다.").font(.callout).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
             }
+            CapacityHistoryView()
             Text("큰 항목").font(.title3.bold())
             ForEach(Array((model.report?.artifacts ?? []).sorted { $0.measurement.allocated > $1.measurement.allocated }.prefix(5))) { artifact in artifactRow(artifact) }
             if model.report == nil { empty("첫 번째 분석을 시작하세요", subtitle: "예시 숫자 대신 현재 Mac의 실제 측정값을 표시합니다.") }
@@ -224,8 +225,20 @@ struct MainView: View {
     private var history: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack { Text("분석 및 정리 기록").font(.title3.bold()); Spacer(); Button("마스킹된 JSON 보고서 내보내기") { model.export() }.disabled(model.report == nil) }
+            CapacityHistoryView()
             ForEach(model.cleanupHistory) { record in
-                VStack(alignment: .leading, spacing: 6) { Text(record.status).font(.headline); Text(record.path).font(.caption); Text("가용 공간 관측 변화: \(Format.bytes(record.observedDelta)) · 다른 앱의 쓰기도 포함될 수 있습니다.").foregroundStyle(.secondary) }.padding()
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack { Text(record.status).font(.headline); Spacer(); Text(record.date.formatted()).font(.caption).foregroundStyle(.secondary) }
+                    Text(record.path).font(.caption).textSelection(.enabled)
+                    if let reason = record.failureReason { Text(reason).foregroundStyle(.orange) }
+                    if let delta = record.observedDelta {
+                        Text("가용 공간 관측 변화: \(Format.bytes(delta)) · 다른 앱의 쓰기도 포함될 수 있습니다.").foregroundStyle(.secondary)
+                    } else { Text("가용 공간 변화: 측정되지 않음").foregroundStyle(.secondary) }
+                    if let path = record.trashPath {
+                        Button("이동한 항목을 Finder에서 보기") { model.reveal(URL(fileURLWithPath: path)) }
+                        Text("휴지통에서 ‘되돌려 놓기’를 사용할 수 있습니다. 이미 이동·삭제한 항목은 찾을 수 없습니다.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }.padding()
             }
             ForEach(model.history) { scan in
                 HStack { Image(systemName: "clock").foregroundStyle(.mint); Text(scan.startedAt.formatted()); Spacer(); Text(scan.mode); Text("프로젝트 \(scan.projects.count) · \(scan.isPartial ? "부분" : "완료")") }.padding().background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
