@@ -11,14 +11,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct MacStorageDoctorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var model = AppModel()
+    @State private var model = AppModel()
     var body: some Scene {
         WindowGroup("Mac Storage Doctor", id: "main") {
-            MainView().environmentObject(model).frame(minWidth: 1040, minHeight: 700)
+            MainView().environment(model).frame(minWidth: 1040, minHeight: 700)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.shutdown() }
         }.defaultSize(width: 1250, height: 820)
         MenuBarExtra {
-            MenuOverview().environmentObject(model)
+            MenuOverview().environment(model)
         } label: {
             Label(model.menuBarLabel, systemImage: model.lowSpace ? "exclamationmark.triangle.fill" : "internaldrive")
                 .help("Mac Storage Doctor · " + model.menuBarDisplay.title + " · 60초마다 갱신")
@@ -26,9 +26,10 @@ struct MacStorageDoctorApp: App {
     }
 }
 struct MenuOverview: View {
-    @EnvironmentObject var model: AppModel
+    @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
     var body: some View {
+        @Bindable var model = model
         VStack(alignment: .leading, spacing: 18) {
             Label("Mac Storage Doctor", systemImage: "cross.case.fill").font(.headline)
             Text(model.volume.map { Format.bytes($0.available) + " 사용 가능" } ?? "용량 확인 불가").font(.title2.bold())

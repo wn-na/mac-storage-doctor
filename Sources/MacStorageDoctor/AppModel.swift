@@ -1,3 +1,4 @@
+import Observation
 import AppKit
 import SwiftUI
 import StorageCore
@@ -10,61 +11,62 @@ struct BatchCleanupPreview: Identifiable {
 }
 
 @MainActor
-final class AppModel: ObservableObject {
-    @Published var volume: Volume?
-    @Published var volumes: [Volume] = []
-    @Published var capacityPoints: [CapacityPoint] = []
-    @Published var capacityError: String?
-    @Published var capacityRange: CapacityRange = .month {
+@Observable
+final class AppModel {
+    var volume: Volume?
+    var volumes: [Volume] = []
+    var capacityPoints: [CapacityPoint] = []
+    var capacityError: String?
+    var capacityRange: CapacityRange = .month {
         didSet { updateCapacityHistory() }
     }
     private var capacityRequest = UUID()
     private var capacityRefreshInFlight = false
     private var capacityChartSubscribers = 0
     private var progressLastPublished = Date.distantPast
-    @Published var report: ScanReport?
-    @Published var history: [ScanSummary] = []
-    @Published var cleanupHistory: [CleanupRecord] = []
-    @Published var scanning = false
-    @Published var paused = false
-    @Published var progress = "검사를 시작하면 실제 측정 결과가 표시됩니다."
-    @Published var error: String?
-    @Published var preview: CleanupPreview?
-    @Published var batchPreview: BatchCleanupPreview?
-    @Published var simulatorBatch: SimulatorCleanupBatch?
-    @Published var selectedDevices: Set<String> = []
-    @Published var managedPreview: ManagedRemovalPreview?
-    @Published var developerInventory = DeveloperInventory()
-    @Published var developerLoaded = false
-    @Published var developerSizesRequested = false
-    @Published var selectedArtifacts = Set<String>()
-    @Published var cleanupSummary: String?
-    @Published var tutorialPresented = !UserDefaults.standard.bool(forKey: "tutorialCompleted")
-    @Published var incrementalMinutes = max(5, UserDefaults.standard.integer(forKey: "incrementalMinutes") == 0 ? 30 : UserDefaults.standard.integer(forKey: "incrementalMinutes"))
+    var report: ScanReport?
+    var history: [ScanSummary] = []
+    var cleanupHistory: [CleanupRecord] = []
+    var scanning = false
+    var paused = false
+    var progress = "검사를 시작하면 실제 측정 결과가 표시됩니다."
+    var error: String?
+    var preview: CleanupPreview?
+    var batchPreview: BatchCleanupPreview?
+    var simulatorBatch: SimulatorCleanupBatch?
+    var selectedDevices: Set<String> = []
+    var managedPreview: ManagedRemovalPreview?
+    var developerInventory = DeveloperInventory()
+    var developerLoaded = false
+    var developerSizesRequested = false
+    var selectedArtifacts = Set<String>()
+    var cleanupSummary: String?
+    var tutorialPresented = !UserDefaults.standard.bool(forKey: "tutorialCompleted")
+    var incrementalMinutes = max(5, UserDefaults.standard.integer(forKey: "incrementalMinutes") == 0 ? 30 : UserDefaults.standard.integer(forKey: "incrementalMinutes"))
     private let developerActions = DeveloperActions()
     private var lastIncremental = Date.distantPast
     var hasApproval: Bool { preview != nil || batchPreview != nil || managedPreview != nil || simulatorBatch != nil }
     var selectedItems: [Artifact] { (report?.artifacts ?? []).filter { selectedArtifacts.contains($0.id) && $0.canTrash } }
     var quickItems: [Artifact] { (report?.artifacts ?? []).filter { $0.quickEligible && !keepWarm.contains($0.projectID ?? "") } }
-    @Published var working = false
-    @Published var installations: [ToolInstallation] = []
-    @Published var assets: [MobileAsset] = []
-    @Published var diagnostics = "조회 버튼을 눌러 현재 시스템 상태를 확인하세요."
-    @Published var keepWarm: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "keepWarm") ?? [])
-    @Published var selectedExternal: Set<String> = []
-    @Published var exclusions = UserDefaults.standard.string(forKey: "exclusions") ?? ""
-    @Published var automatic = UserDefaults.standard.bool(forKey: "automatic")
-    @Published var warningGB = max(1, UserDefaults.standard.integer(forKey: "warningGB") == 0 ? 50 : UserDefaults.standard.integer(forKey: "warningGB"))
-    @Published var menuBarDisplay = MenuBarDisplay(rawValue: UserDefaults.standard.string(forKey: "menuBarDisplay") ?? "") ?? .available {
+    var working = false
+    var installations: [ToolInstallation] = []
+    var assets: [MobileAsset] = []
+    var diagnostics = "조회 버튼을 눌러 현재 시스템 상태를 확인하세요."
+    var keepWarm: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "keepWarm") ?? [])
+    var selectedExternal: Set<String> = []
+    var exclusions = UserDefaults.standard.string(forKey: "exclusions") ?? ""
+    var automatic = UserDefaults.standard.bool(forKey: "automatic")
+    var warningGB = max(1, UserDefaults.standard.integer(forKey: "warningGB") == 0 ? 50 : UserDefaults.standard.integer(forKey: "warningGB"))
+    var menuBarDisplay = MenuBarDisplay(rawValue: UserDefaults.standard.string(forKey: "menuBarDisplay") ?? "") ?? .available {
         didSet { UserDefaults.standard.set(menuBarDisplay.rawValue, forKey: "menuBarDisplay") }
     }
-    @Published var loginEnabled = false
-    @Published var loginStatus = ""
+    var loginEnabled = false
+    var loginStatus = ""
     var menuBarLabel: String { MenuBarSummary.label(volume: volume, display: menuBarDisplay) }
     var lowSpace: Bool { MenuBarSummary.isLow(volume: volume, warningGB: warningGB) }
-    @Published var monitoring = UserDefaults.standard.object(forKey: "monitoring") as? Bool ?? false
-    @Published var monitoringStatus = "전체 분석 후 변경 감시 시작"
-    @Published var requiresFullRescan = false
+    var monitoring = UserDefaults.standard.object(forKey: "monitoring") as? Bool ?? false
+    var monitoringStatus = "전체 분석 후 변경 감시 시작"
+    var requiresFullRescan = false
     private let watcher = FSEventWatcher()
     private var watcherGeneration = UUID()
     private var watchedRoots: [URL] = []

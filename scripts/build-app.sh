@@ -16,7 +16,7 @@ mkdir -p "$APP/Contents/MacOS"
 BINARIES=()
 for ARCH in $BUILD_ARCHS; do
     [[ "$ARCH" == arm64 || "$ARCH" == x86_64 ]] || { echo "Unsupported architecture: $ARCH" >&2; exit 1; }
-    ARGS=(-c release --arch "$ARCH" --scratch-path "$PWD/.build/package-$ARCH" --disable-sandbox --cache-path "$PWD/.build/cache")
+    ARGS=(-c release -Xswiftc -Osize --arch "$ARCH" --scratch-path "$PWD/.build/package-$ARCH" --disable-sandbox --cache-path "$PWD/.build/cache")
     swift build "${ARGS[@]}"
     BIN_DIR=$(swift build "${ARGS[@]}" --show-bin-path)
     BINARIES+=("$BIN_DIR/MacStorageDoctor")
@@ -27,6 +27,7 @@ if [[ ${#BINARIES[@]} == 1 ]]; then
 else
     lipo -create "${BINARIES[@]}" -output "$APP/Contents/MacOS/MacStorageDoctor"
 fi
+/usr/bin/strip -S "$APP/Contents/MacOS/MacStorageDoctor"
 export VERSION BUILD_NUMBER APP
 python3 - <<'PY'
 import os, plistlib

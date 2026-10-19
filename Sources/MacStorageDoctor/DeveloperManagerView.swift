@@ -2,7 +2,7 @@ import SwiftUI
 import StorageCore
 
 struct DeveloperManagerView: View {
-    @EnvironmentObject var model: AppModel
+    @Environment(AppModel.self) private var model
     @State private var section = 0
     private var selectedDevices: [SimulatorDevice] {
         model.developerInventory.devices.filter { model.selectedDevices.contains($0.id) }

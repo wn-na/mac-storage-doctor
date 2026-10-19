@@ -3,13 +3,14 @@ import Charts
 import StorageCore
 
 struct CapacityHistoryView: View {
-    @EnvironmentObject var model: AppModel
+    @Environment(AppModel.self) private var model
     @State private var selectedDate: Date?
     private var selected: CapacityPoint? {
         guard let selectedDate else { return nil }
         return model.capacityPoints.min { abs($0.bucket.timeIntervalSince(selectedDate)) < abs($1.bucket.timeIntervalSince(selectedDate)) }
     }
     var body: some View {
+        @Bindable var model = model
         GroupBox {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {

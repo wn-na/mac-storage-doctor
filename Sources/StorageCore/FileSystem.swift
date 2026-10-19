@@ -1,6 +1,11 @@
 import Foundation
 import Darwin
 
+struct InodeKey: Hashable {
+    let device: dev_t
+    let inode: ino_t
+}
+
 public enum FileSystem {
     public static func canonicalPath(_ url: URL) -> String {
         guard let pointer = realpath(url.path, nil) else { return url.path }
@@ -42,15 +47,19 @@ public enum FileSystem {
         guard let initial = try? metadata(root) else {
             result.issues.append(.init(root.path, "읽을 수 없음")); return result
         }
-        var queue = [root], seen = Set<String>()
+        var queue = [root], seen = Set<InodeKey>()
         while let url = queue.popLast() {
             if Task.isCancelled { result.issues.append(.init(root.path, "측정 취소")); break }
             do {
                 let s = try metadata(url)
                 guard s.st_dev == initial.st_dev else { result.issues.append(.init(url.path, "다른 파일시스템: 중복 집계 제외")); continue }
-                let key = "\(s.st_dev):\(s.st_ino)"
-                guard seen.insert(key).inserted else { continue }
                 if isLink(s) { continue }
+                // Single-link files cannot occur twice in this non-symlink traversal.
+                // Retain identities only for directories and multiply-linked files.
+                if isDirectory(s) || s.st_nlink > 1 {
+                    let key = InodeKey(device: s.st_dev, inode: s.st_ino)
+                    guard seen.insert(key).inserted else { continue }
+                }
                 result.allocated += Int64(s.st_blocks) * 512
                 if isDirectory(s) { queue += try children(url) }
                 else { result.logical += Int64(s.st_size); result.files += 1 }

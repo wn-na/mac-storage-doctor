@@ -2,7 +2,7 @@ import SwiftUI
 import StorageCore
 
 struct BatchCleanupSheet: View {
-    @EnvironmentObject var model: AppModel
+    @Environment(AppModel.self) private var model
     let batch: BatchCleanupPreview
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -26,7 +26,7 @@ struct BatchCleanupSheet: View {
     }
 }
 struct ManagedRemovalSheet: View {
-    @EnvironmentObject var model: AppModel
+    @Environment(AppModel.self) private var model
     let preview: ManagedRemovalPreview
     @State private var acknowledged = false
     var body: some View {
@@ -42,7 +42,7 @@ struct ManagedRemovalSheet: View {
 }
 
 struct SimulatorCleanupSheet: View {
-    @EnvironmentObject var model: AppModel
+    @Environment(AppModel.self) private var model
     let batch: SimulatorCleanupBatch
     @State private var acknowledged = false
     var body: some View {

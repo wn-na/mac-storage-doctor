@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct TutorialView: View {
-    @EnvironmentObject var model: AppModel
+    @Environment(AppModel.self) private var model
     @State private var step = 0
     private let titles = ["먼저, Mac의 공간을 확인하세요", "유형과 용량 상위 10개를 비교하세요", "선택 정리 또는 빠른 정리", "SDK와 시뮬레이터는 따로 관리", "필요할 때 분석하세요"]
     private let descriptions = [

@@ -16,7 +16,7 @@ private enum Page: String, CaseIterable, Identifiable {
 }
 
 struct MainView: View {
-    @EnvironmentObject var model: AppModel
+    @Environment(AppModel.self) private var model
     @State private var page: Page = .storage
     @State private var kind: ArtifactKind?
     @State private var topOnly = true
@@ -26,6 +26,7 @@ struct MainView: View {
     @State private var showCoverage = false
     @State private var showAllQuickItems = false
     var body: some View {
+        @Bindable var model = model
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
@@ -88,10 +89,10 @@ struct MainView: View {
         }
         .tint(.mint)
         .alert("작업 안내", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) { Button("확인") { model.error = nil } } message: { Text(model.error ?? "") }
-        .sheet(item: $model.batchPreview) { BatchCleanupSheet(batch: $0).environmentObject(model) }
-        .sheet(item: $model.simulatorBatch) { SimulatorCleanupSheet(batch: $0).environmentObject(model) }
-        .sheet(item: $model.managedPreview) { ManagedRemovalSheet(preview: $0).environmentObject(model) }
-        .sheet(isPresented: $model.tutorialPresented) { TutorialView().environmentObject(model) }
+        .sheet(item: $model.batchPreview) { BatchCleanupSheet(batch: $0).environment(model) }
+        .sheet(item: $model.simulatorBatch) { SimulatorCleanupSheet(batch: $0).environment(model) }
+        .sheet(item: $model.managedPreview) { ManagedRemovalSheet(preview: $0).environment(model) }
+        .sheet(isPresented: $model.tutorialPresented) { TutorialView().environment(model) }
     }
 
     @ViewBuilder private var content: some View {
@@ -298,7 +299,8 @@ struct MainView: View {
         }
     }
     private var settings: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        @Bindable var model = model
+        return VStack(alignment: .leading, spacing: 18) {
             Button { model.tutorialPresented = true } label: { Label("사용법 튜토리얼 다시 보기", systemImage: "questionmark.circle") }
             GroupBox("상단 메뉴바 위젯") {
                 VStack(alignment: .leading, spacing: 12) {
