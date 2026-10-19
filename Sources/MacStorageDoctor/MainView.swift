@@ -24,6 +24,7 @@ struct MainView: View {
     @State private var showOverview = false
     @State private var showExplorer = false
     @State private var showCoverage = false
+    @State private var showAllQuickItems = false
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 8) {
@@ -97,6 +98,7 @@ struct MainView: View {
         switch page {
         case .storage:
             HStack { Label("사용 가능한 공간", systemImage: "internaldrive"); Text(model.volume.map { Format.bytes($0.available) } ?? "—").font(.title2.bold()); Spacer(); Text("분석은 기본 수동 · 용량 표시만 60초 갱신").font(.caption).foregroundStyle(.secondary) }
+            quickCleanupCard
             inventory(title: "유형별 용량과 정리", artifacts: model.report?.artifacts ?? [])
             DisclosureGroup("용량 추이 · 분석 범위 설명", isExpanded: $showOverview) { if showOverview { overview } }
             DisclosureGroup("폴더별 용량 탐색", isExpanded: $showExplorer) { if showExplorer { SpaceExplorer() } }
@@ -167,6 +169,54 @@ struct MainView: View {
             if model.report?.projects.isEmpty != false { empty("발견된 프로젝트 없음", subtitle: "전체 분석으로 로컬 볼륨을 검사하세요. 빠른 분석은 기존 프로젝트 결과를 유지합니다.") }
         }
     }
+    private var quickCleanupCard: some View {
+        let candidates = CleanupCatalog.top(model.quickItems, limit: model.quickItems.count)
+        let displayed = showAllQuickItems ? candidates : Array(candidates.prefix(5))
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Label("빠른 정리", systemImage: "sparkles").font(.title3.bold())
+                    Text("다시 만들 수 있는 빌드 생성물").foregroundStyle(.secondary)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(Format.bytes(candidates.reduce(0) { $0 + $1.measurement.allocated })).font(.title2.bold().monospacedDigit())
+                    Text("검토 후보 \(candidates.count)개").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text("DerivedData, build, .build 등 재빌드 가능한 항목을 휴지통으로 옮깁니다. Keep Warm 프로젝트와 설치 의존성은 제외합니다.").font(.callout)
+            if candidates.isEmpty {
+                Text(model.report == nil ? "분석 후 정리할 후보가 여기에 표시됩니다." : "현재 빠른 정리 후보가 없습니다. 보호 설정 또는 측정 결과에 따라 제외될 수 있습니다.")
+                    .foregroundStyle(.secondary).padding(.vertical, 8)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(displayed) { item in
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.owner + " · " + item.url.lastPathComponent).font(.subheadline.bold())
+                                Text(item.url.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            }
+                            Spacer()
+                            Text(Format.bytes(item.measurement.allocated)).font(.subheadline.monospacedDigit())
+                            Button("Finder") { model.reveal(item.url) }
+                        }
+                        Divider()
+                    }
+                }
+                if candidates.count > 5 {
+                    Button(showAllQuickItems ? "간단히 보기" : "후보 \(candidates.count)개 모두 보기") { showAllQuickItems.toggle() }
+                }
+            }
+            HStack(alignment: .bottom) {
+                Text("마지막 분석 기준 · 아래 검색·상위 10개 필터와 독립적입니다.\n대상 검토 후 승인해야 실행됩니다. 휴지통을 비우기 전에는 공간이 회수되지 않습니다.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("대상 검토…") { model.prepareBatch(quick: true) }
+                    .buttonStyle(.borderedProminent).disabled(candidates.isEmpty || model.working || model.scanning || model.hasApproval)
+            }
+        }.padding(20).background(.mint.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.mint.opacity(0.2)))
+    }
     private func inventory(title: String, artifacts: [Artifact]) -> some View {
         let filtered = artifacts.filter { (kind == nil || $0.kind == kind) && (search.isEmpty || ($0.owner + $0.url.path).localizedCaseInsensitiveContains(search)) }
         let visible = CleanupCatalog.top(filtered, limit: topOnly ? 10 : filtered.count)
@@ -174,13 +224,10 @@ struct MainView: View {
             HStack {
                 Text(title).font(.title3.bold())
                 Spacer()
-                Button("빠른 정리 (\(model.quickItems.count))") { model.prepareBatch(quick: true) }
-                    .disabled(model.quickItems.isEmpty || model.working || model.scanning)
-                    .help("새 분석 없이 재생성 가능한 빌드 생성물만 확인하고 한 번 승인하여 휴지통으로 이동합니다.")
                 Button("선택 정리 (\(model.selectedItems.count))") { model.prepareBatch() }
                     .buttonStyle(.borderedProminent).disabled(model.selectedItems.isEmpty || model.working || model.scanning)
             }
-            Text("빠른 정리는 빌드 생성물만, 선택 정리는 체크한 항목만 처리합니다. 실행 전에 변경 여부와 Keep Warm을 다시 확인합니다. 휴지통으로 이동하며 비우기 전에는 공간이 회수되지 않습니다.")
+            Text("아래 목록에서 필요한 항목을 선택하세요. 보호된 데이터와 공식 관리 대상은 정리에서 제외됩니다.")
                 .font(.callout).foregroundStyle(.secondary)
             HStack {
                 TextField("앱 이름 또는 경로 검색", text: $search).textFieldStyle(.roundedBorder)
